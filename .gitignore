@@ -1,0 +1,37 @@
+﻿# Keil uVision build outputs
+Project/*/Objects/
+Project/*/Listings/
+*.uvoptx
+*.uvguix.*
+*.scvd
+*.crf
+*.lst
+*.axf
+*.hex
+*.build_log.htm
+*.dep
+
+# Compiled objects
+*.o
+*.d
+*.elf
+*.bin
+
+# OS junk
+Thumbs.db
+Desktop.ini
+*.tmp
+
+# Backup / test artifacts
+backups/
+*.bak
+
+# IDE settings per-user
+*.uvguix
+
+# JLink
+JLinkLog.txt
+JLink*
+
+# CMSIS Pack / DFM
+*.pack
