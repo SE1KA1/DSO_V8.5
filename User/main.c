@@ -17,6 +17,7 @@
 #include "rtos_cpu_stats.h"
 #include "dso/dso_engine.h"
 #include "dso/dso_wavegen.h"
+#include "dso/dso_eth_upload.h"
 #include "bsp_vram_layout.h"
 #include "vram_sentinels.h"
 #include "core_cm7.h"
@@ -403,6 +404,7 @@ int main(void)
 #if (USE_DSO_ENGINE != 0)
     RollHistory_Init();
 #endif
+    DSO_ETH_Upload_Init();
 
 #if (LCD_DIAGNOSTIC_MODE == 1)
     /* 硬件诊断测试：绕过 emWin 直接测试 LTDC */
@@ -440,6 +442,8 @@ int main(void)
     RtosCpuStats_TaskCreate();
 #endif
 
+    if (xTaskCreate(DSO_ETH_Upload_Task, "ETH_Up", 2560, NULL, 1, NULL) != pdPASS)
+    { printf("[BOOT] FAIL ETH_Up\r\n"); Error_Handler(__FILE__, __LINE__); }
     /* 启动调度器前恢复系统滴答 */
     HAL_ResumeTick();
     __set_PRIMASK(0);

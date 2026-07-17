@@ -21,6 +21,7 @@
 #include "dso_config.h"
 #include "dso_engine_cal.h"
 #include "dso_engine_roll.h"
+#include "dso_eth_upload.h"
 #include "stm32h7xx_hal.h"
 #include "bsp_uart_fifo.h"
 #include "debug_uart_lock.h"
@@ -1463,6 +1464,7 @@ static void engine_log_acq_hold(uint32_t frame_id,
                        (unsigned long)DSO_Acq_GetTimArr());
     if (written > 0) {
         DSO_SerialDebug_SendLine(line);
+        DSO_ETH_Upload_SendLine(line);
     }
 #else
     (void)frame_id;
@@ -3421,6 +3423,7 @@ void DSO_Engine_Task(void *param)
                                                          hs8cal_line,
                                                          sizeof(hs8cal_line)) > 0u) {
                         DSO_SerialDebug_SendLine(hs8cal_line);
+                        DSO_ETH_Upload_SendLine(hs8cal_line);
                     }
                 }
                 last_stage = cs->last_stage;

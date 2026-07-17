@@ -7894,7 +7894,39 @@ typedef struct
 #define ETH_MTLRQCR_RQPA                              ETH_MTLRQCR_RQPA_Msk     /* Receive Queue Packet Arbitration */
 #define ETH_MTLRQCR_RQW_Pos                           (0U)                     
 #define ETH_MTLRQCR_RQW_Msk                           (0x7U << ETH_MTLRQCR_RQW_Pos) /*!< 0x00000007 */
-#define ETH_MTLRQCR_RQW                               ETH_MTLRQCR_RQW_Msk      /* Receive Queue Weight */
+#define ETH_MTLRQCR_RQW                               ETH_MTLRQCR_RQW_Msk
+
+/* ETH MMC register bit definitions (for HAL ETH driver) */
+#define ETH_MMCRIMR_RXLPITRCIM_Pos 27U
+#define ETH_MMCRIMR_RXLPITRCIM_Msk (0x1UL<<27)
+#define ETH_MMCRIMR_RXLPITRCIM     ETH_MMCRIMR_RXLPITRCIM_Msk
+#define ETH_MMCRIMR_RXLPIUSCIM_Pos 26U
+#define ETH_MMCRIMR_RXLPIUSCIM_Msk (0x1UL<<26)
+#define ETH_MMCRIMR_RXLPIUSCIM     ETH_MMCRIMR_RXLPIUSCIM_Msk
+#define ETH_MMCRIMR_RXUCGPIM_Pos   17U
+#define ETH_MMCRIMR_RXUCGPIM_Msk   (0x1UL<<17)
+#define ETH_MMCRIMR_RXUCGPIM       ETH_MMCRIMR_RXUCGPIM_Msk
+#define ETH_MMCRIMR_RXALGNERPIM_Pos 6U
+#define ETH_MMCRIMR_RXALGNERPIM_Msk (0x1UL<<6)
+#define ETH_MMCRIMR_RXALGNERPIM    ETH_MMCRIMR_RXALGNERPIM_Msk
+#define ETH_MMCRIMR_RXCRCERPIM_Pos  5U
+#define ETH_MMCRIMR_RXCRCERPIM_Msk  (0x1UL<<5)
+#define ETH_MMCRIMR_RXCRCERPIM     ETH_MMCRIMR_RXCRCERPIM_Msk
+#define ETH_MMCTIMR_TXLPITRCIM_Pos 27U
+#define ETH_MMCTIMR_TXLPITRCIM_Msk (0x1UL<<27)
+#define ETH_MMCTIMR_TXLPITRCIM     ETH_MMCTIMR_TXLPITRCIM_Msk
+#define ETH_MMCTIMR_TXLPIUSCIM_Pos 26U
+#define ETH_MMCTIMR_TXLPIUSCIM_Msk (0x1UL<<26)
+#define ETH_MMCTIMR_TXLPIUSCIM     ETH_MMCTIMR_TXLPIUSCIM_Msk
+#define ETH_MMCTIMR_TXGPKTIM_Pos   21U
+#define ETH_MMCTIMR_TXGPKTIM_Msk   (0x1UL<<21)
+#define ETH_MMCTIMR_TXGPKTIM       ETH_MMCTIMR_TXGPKTIM_Msk
+#define ETH_MMCTIMR_TXMCOLGPIM_Pos 15U
+#define ETH_MMCTIMR_TXMCOLGPIM_Msk (0x1UL<<15)
+#define ETH_MMCTIMR_TXMCOLGPIM     ETH_MMCTIMR_TXMCOLGPIM_Msk
+#define ETH_MMCTIMR_TXSCOLGPIM_Pos 14U
+#define ETH_MMCTIMR_TXSCOLGPIM_Msk (0x1UL<<14)
+#define ETH_MMCTIMR_TXSCOLGPIM     ETH_MMCTIMR_TXSCOLGPIM_Msk
 
 /* Bit definition for Ethernet DMA Mode Register */
 #define ETH_DMAMR_INTM_Pos                            (16U)                    
