@@ -190,7 +190,7 @@
             <hadIRAM2>1</hadIRAM2>
             <hadIROM2>1</hadIROM2>
             <StupSel>8</StupSel>
-            <useUlib>1</useUlib>
+            <useUlib>0</useUlib>
             <EndSel>0</EndSel>
             <uLtcg>0</uLtcg>
             <nSecure>0</nSecure>
@@ -1103,11 +1103,6 @@
               <FileName>lan8742.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\Drivers\BSP\Components\lan8742\lan8742.c</FilePath>
-            </File>
-            <File>
-              <FileName>eth_hal_stubs.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\LWIP\Target\eth_hal_stubs.c</FilePath>
             </File>
             <File>
               <FileName>dso_eth_upload.c</FileName>

@@ -20,7 +20,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32h7xx_hal.h"
-#include <stdio.h>
 #include "lwip/opt.h"
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
@@ -34,6 +33,7 @@
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
+#include <stdio.h>
 
 /* USER CODE END 0 */
 
@@ -44,7 +44,7 @@
 #define ETHIF_TX_TIMEOUT (2000U)
 /* USER CODE BEGIN OS_THREAD_STACK_SIZE_WITH_RTOS */
 /* Stack size of the interface thread */
-#define INTERFACE_THREAD_STACK_SIZE ( 350 )
+#define INTERFACE_THREAD_STACK_SIZE ( 1024 )
 /* USER CODE END OS_THREAD_STACK_SIZE_WITH_RTOS */
 /* Network interface name */
 #define IFNAME0 's'
@@ -56,6 +56,22 @@
 /* ETH_RX_BUFFER_SIZE parameter is defined in lwipopts.h */
 
 /* USER CODE BEGIN 1 */
+#define LAN8720_SMR_MODE_SHIFT          (5U)
+#define LAN8720_SMR_MODE_ALL_CAPABLE    ((uint32_t)0x00E0U)
+#define LAN8720_SMR_MODE_WRITE_ONE      ((uint32_t)0x4000U)
+#define LAN8720_ANAR_SELECTOR_IEEE8023  ((uint32_t)0x0001U)
+#define LAN8720_ANAR_ALL_CAPABLE        ((uint32_t)(LAN8742_ANAR_100BASE_TX_FD | \
+                                                    LAN8742_ANAR_100BASE_TX | \
+                                                    LAN8742_ANAR_10BASE_T_FD | \
+                                                    LAN8742_ANAR_10BASE_T | \
+                                                    LAN8720_ANAR_SELECTOR_IEEE8023))
+
+/*
+ * LAN8720A/LAN8742 SCSIR bit 15 is AMDIXCTRL: 0 = Auto-MDIX enabled,
+ * 1 = Auto-MDIX disabled. The ST macro name looks positive, so keep a local
+ * alias to avoid using it backwards in debug code.
+ */
+#define LAN8720_SCSIR_AMDIXCTRL_DISABLE LAN8742_SCSIR_AUTO_MDIX_ENABLE
 
 /* USER CODE END 1 */
 
@@ -96,7 +112,7 @@ typedef struct
 } RxBuff_t;
 
 /* Memory Pool Declaration */
-#define ETH_RX_BUFFER_CNT             12U
+#define ETH_RX_BUFFER_CNT             4U
 LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX PBUF pool");
 
 /* Variable Definitions */
@@ -133,6 +149,178 @@ __attribute__((section(".Rx_PoolSection"))) extern u8_t memp_memory_RX_POOL_base
 #endif
 
 /* USER CODE BEGIN 2 */
+typedef struct
+{
+  int32_t hal_init_status;
+  uint32_t hal_error;
+  int32_t phy_init_status;
+  int32_t phy_link_state;
+  uint32_t phy_dev_addr;
+
+  uint32_t scan_read_ok_count;
+  uint32_t scan_found_addr;
+  uint32_t scan_phyid1;
+  uint32_t scan_phyid2;
+
+  uint32_t phy_bcr;
+  uint32_t phy_bsr;
+  uint32_t phy_id1;
+  uint32_t phy_id2;
+  uint32_t phy_anar;
+  uint32_t phy_anlpar;
+  uint32_t phy_aner;
+  uint32_t phy_mcsr;
+  uint32_t phy_smr;
+  uint32_t phy_tpdcr;
+  uint32_t phy_tcsr;
+  uint32_t phy_tcsr_after_start;
+  uint32_t cable_diag_count;
+  uint32_t cable_diag_status;
+  uint32_t cable_diag_type;
+  uint32_t cable_diag_length;
+  uint32_t phy_scsir;
+  uint32_t phy_isfr;
+  uint32_t phy_physcsr;
+  uint32_t phy_bsr_latched;
+
+  uint32_t lan8720_phy_addr_ok;
+  uint32_t lan8720_oui;
+  uint32_t lan8720_model;
+  uint32_t lan8720_rev;
+  uint32_t lan8720_mode;
+  uint32_t lan8720_phy_addr_strap;
+  uint32_t lan8720_link_bit;
+  uint32_t lan8720_autoneg_ability;
+  uint32_t lan8720_autoneg_complete;
+  uint32_t lan8720_remote_fault;
+  uint32_t lan8720_energy_on;
+  uint32_t lan8720_auto_mdix;
+  uint32_t lan8720_amdix_disabled;
+  uint32_t lan8720_mdix_state;
+  uint32_t lan8720_speed_100;
+  uint32_t lan8720_full_duplex;
+  uint32_t phy_normal_mode;
+  uint32_t phy_loopback_on;
+  uint32_t phy_power_down;
+  uint32_t phy_isolate;
+  uint32_t phy_autoneg_en;
+  uint32_t phy_restart_autoneg;
+
+  uint32_t netif_up;
+  uint32_t netif_link_up;
+  uint32_t link_poll_count;
+  uint32_t link_down_poll_count;
+  uint32_t link_recover_count;
+  uint32_t mac_restart_count;
+  uint32_t mac_watchdog_count;
+  uint32_t mac_watchdog_restart_count;
+  uint32_t rx_watchdog_count;
+  uint32_t rx_watchdog_restart_count;
+  uint32_t link_flap_count;
+  uint32_t rx_frame_count;
+  uint32_t tx_frame_count;
+  uint32_t rx_byte_count;
+  uint32_t tx_byte_count;
+  uint32_t rx_irq_count;
+  uint32_t tx_irq_count;
+  uint32_t tx_hal_ok_count;
+  uint32_t tx_hal_busy_count;
+  uint32_t tx_hal_error_count;
+  int32_t last_hal_tx_status;
+  uint32_t last_hal_error;
+  uint32_t eth_error_irq_count;
+  uint32_t eth_dma_error;
+  uint32_t eth_mac_error;
+  uint32_t tx_dma_csr;
+  uint32_t tx_maccr;
+  uint32_t tx_mtl_tqdr;
+  uint32_t tx_desc_tdes0;
+  uint32_t tx_desc_tdes1;
+  uint32_t tx_desc_tdes2;
+  uint32_t tx_desc_tdes3;
+  uint32_t rx_alloc_error_count;
+  int32_t last_read_status;
+  uint32_t rx_input_stage;
+  uint32_t rx_input_wake_count;
+  int32_t last_netif_input_result;
+  uint32_t last_rx_ethertype;
+  uint32_t last_tx_ethertype;
+  int32_t last_tx_result;
+  uint32_t force_netif_up;
+  uint32_t force_up_count;
+  int32_t force_link_state;
+  int32_t arp_announce_result;
+  uint32_t arp_announce_count;
+
+  uint32_t rmii_sample_count;
+  uint32_t rmii_crs_dv_high_count;
+  uint32_t rmii_crs_dv_flip_count;
+  uint32_t rmii_rxd0_high_count;
+  uint32_t rmii_rxd0_flip_count;
+  uint32_t rmii_rxd1_high_count;
+  uint32_t rmii_rxd1_flip_count;
+  uint32_t rmii_first_sample;
+  uint32_t rmii_last_sample;
+  uint32_t rmii_tx_sample_count;
+  uint32_t rmii_tx_en_high_count;
+  uint32_t rmii_tx_en_flip_count;
+  uint32_t rmii_txd0_high_count;
+  uint32_t rmii_txd0_flip_count;
+  uint32_t rmii_txd1_high_count;
+  uint32_t rmii_txd1_flip_count;
+  uint32_t rmii_tx_first_sample;
+  uint32_t rmii_tx_last_sample;
+
+  uint32_t cmd;
+  uint32_t cmd_arg;
+  int32_t cmd_result;
+  uint32_t cmd_count;
+
+  uint32_t refclk_sample_count;
+  uint32_t refclk_flip_count;
+  uint32_t refclk_high_count;
+  uint32_t refclk_low_count;
+  uint32_t refclk_first_level;
+  uint32_t refclk_last_level;
+
+  uint32_t loop_cmd_count;
+  int32_t loop_tx_status;
+  int32_t loop_rx_status;
+  uint32_t loop_rx_len;
+  uint32_t loop_match;
+  uint32_t loop_magic;
+  uint32_t loop_maccr;
+  uint32_t loop_dma_csr;
+  uint32_t loop_mtl_rxq;
+  uint32_t loop_mtl_txq;
+  uint32_t loop_poll_reads;
+  uint32_t loop_poll_hit;
+} ETH_DebugInfo_t;
+
+volatile ETH_DebugInfo_t eth_dbg = {
+  .hal_init_status = -999,
+  .hal_error = 0xFFFFFFFFU,
+  .phy_init_status = -999,
+  .phy_link_state = -999,
+  .phy_dev_addr = 0xFFFFFFFFU,
+  .scan_found_addr = 0xFFFFFFFFU,
+  .scan_phyid1 = 0xFFFFFFFFU,
+  .scan_phyid2 = 0xFFFFFFFFU,
+  .phy_bcr = 0xFFFFFFFFU,
+  .phy_bsr = 0xFFFFFFFFU,
+  .phy_id1 = 0xFFFFFFFFU,
+  .phy_id2 = 0xFFFFFFFFU,
+  .phy_anar = 0xFFFFFFFFU,
+  .phy_anlpar = 0xFFFFFFFFU,
+  .phy_aner = 0xFFFFFFFFU,
+  .phy_mcsr = 0xFFFFFFFFU,
+  .phy_smr = 0xFFFFFFFFU,
+  .phy_scsir = 0xFFFFFFFFU,
+  .phy_isfr = 0xFFFFFFFFU,
+  .phy_physcsr = 0xFFFFFFFFU,
+  .cmd_result = -999
+};
+static struct netif *eth_dbg_netif = NULL;
 
 /* USER CODE END 2 */
 
@@ -159,6 +347,54 @@ lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
                                   ETH_PHY_IO_GetTick};
 
 /* USER CODE BEGIN 3 */
+static void ETH_DebugScanPhy(void);
+static void ETH_DebugReadPhyRegs(void);
+static void ETH_DebugDecodeLan8720(void);
+static int32_t ETH_PHY_RestoreNormalMode(void);
+static int32_t ETH_DebugForceNetifUp(int32_t link_state);
+static int32_t ETH_DebugSendArpAnnouncement(void);
+static void ETH_DebugSampleRmiiRxPins(uint32_t samples);
+static void ETH_DebugWatchRmiiRxPins(uint32_t duration_ms);
+static void ETH_DebugWatchRmiiTxPins(uint32_t duration_ms);
+static void ETH_DebugCaptureTxState(void);
+static int32_t ETH_DebugRunCableDiagnostic(void);
+static void ETH_DebugHandleCommand(void);
+static void ETH_DebugSampleRefClk(uint32_t samples);
+static void ETH_DebugRunLoopbackTest(void);
+static int32_t ETH_PHY_GetLinkStateCompat(void);
+
+#ifndef LAN8720_ASSUME_LINK_UP
+#define LAN8720_ASSUME_LINK_UP 1U
+#endif
+
+#ifndef LAN8720_ASSUME_LINK_STATE
+#define LAN8720_ASSUME_LINK_STATE LAN8742_STATUS_100MBITS_FULLDUPLEX
+#endif
+
+#ifndef LAN8720_FALLBACK_LINK_STATE
+#define LAN8720_FALLBACK_LINK_STATE LAN8742_STATUS_100MBITS_FULLDUPLEX
+#endif
+
+#ifndef LAN8720_PHY_RESET_SETTLE_MS
+#define LAN8720_PHY_RESET_SETTLE_MS 1500U
+#endif
+
+#ifndef LAN8720_MAC_WATCHDOG_RESTART_POLLS
+#define LAN8720_MAC_WATCHDOG_RESTART_POLLS 200U
+#endif
+
+#ifndef LAN8720_RX_WATCHDOG_RESTART_POLLS
+#define LAN8720_RX_WATCHDOG_RESTART_POLLS 200U
+#endif
+
+static uint8_t ETH_MACAddr[6] = {0x00U, 0x80U, 0xE1U, 0x00U, 0x00U, 0x00U};
+
+/*
+ * CubeMX regenerates calls to LAN8742_GetLinkState(). Keep this local macro in
+ * a USER CODE block so regenerated code still uses the LAN8720A-compatible
+ * status decoder below.
+ */
+#define LAN8742_GetLinkState(pObj) ETH_PHY_GetLinkStateCompat()
 
 /* USER CODE END 3 */
 
@@ -172,6 +408,7 @@ void pbuf_free_custom(struct pbuf *p);
   */
 void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
+  eth_dbg.rx_irq_count++;
   osSemaphoreRelease(RxPktSemaphore);
 }
 /**
@@ -181,6 +418,7 @@ void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
   */
 void HAL_ETH_TxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
+  eth_dbg.tx_irq_count++;
   osSemaphoreRelease(TxPktSemaphore);
 }
 /**
@@ -190,6 +428,9 @@ void HAL_ETH_TxCpltCallback(ETH_HandleTypeDef *handlerEth)
   */
 void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
 {
+  eth_dbg.eth_error_irq_count++;
+  eth_dbg.eth_dma_error = HAL_ETH_GetDMAError(handlerEth);
+  eth_dbg.eth_mac_error = HAL_ETH_GetMACError(handlerEth);
   if((HAL_ETH_GetDMAError(handlerEth) & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
   {
      osSemaphoreRelease(RxPktSemaphore);
@@ -197,6 +438,978 @@ void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
 }
 
 /* USER CODE BEGIN 4 */
+static void ETH_DebugScanPhy(void)
+{
+  uint32_t addr;
+  uint32_t phyid1;
+  uint32_t phyid2;
+
+  eth_dbg.scan_read_ok_count = 0U;
+  eth_dbg.scan_found_addr = 0xFFFFFFFFU;
+  eth_dbg.scan_phyid1 = 0xFFFFFFFFU;
+  eth_dbg.scan_phyid2 = 0xFFFFFFFFU;
+
+  for(addr = 0U; addr <= 31U; addr++)
+  {
+    phyid1 = 0xFFFFFFFFU;
+    phyid2 = 0xFFFFFFFFU;
+
+    if((ETH_PHY_IO_ReadReg(addr, LAN8742_PHYI1R, &phyid1) == 0) &&
+       (ETH_PHY_IO_ReadReg(addr, LAN8742_PHYI2R, &phyid2) == 0))
+    {
+      if((phyid1 != 0x0000U) && (phyid1 != 0xFFFFU) &&
+         (phyid2 != 0x0000U) && (phyid2 != 0xFFFFU))
+      {
+        eth_dbg.scan_read_ok_count++;
+        if(eth_dbg.scan_found_addr == 0xFFFFFFFFU)
+        {
+          eth_dbg.scan_found_addr = addr;
+          eth_dbg.scan_phyid1 = phyid1;
+          eth_dbg.scan_phyid2 = phyid2;
+        }
+      }
+    }
+  }
+}
+
+static void ETH_DebugReadPhyRegs(void)
+{
+  uint32_t addr = LAN8742.DevAddr;
+  uint32_t value;
+
+  eth_dbg.phy_dev_addr = addr;
+  eth_dbg.phy_bcr = 0xFFFFFFFFU;
+  eth_dbg.phy_bsr = 0xFFFFFFFFU;
+  eth_dbg.phy_id1 = 0xFFFFFFFFU;
+  eth_dbg.phy_id2 = 0xFFFFFFFFU;
+  eth_dbg.phy_anar = 0xFFFFFFFFU;
+  eth_dbg.phy_anlpar = 0xFFFFFFFFU;
+  eth_dbg.phy_aner = 0xFFFFFFFFU;
+  eth_dbg.phy_mcsr = 0xFFFFFFFFU;
+  eth_dbg.phy_smr = 0xFFFFFFFFU;
+  eth_dbg.phy_tpdcr = 0xFFFFFFFFU;
+  eth_dbg.phy_tcsr = 0xFFFFFFFFU;
+  eth_dbg.phy_scsir = 0xFFFFFFFFU;
+  eth_dbg.phy_isfr = 0xFFFFFFFFU;
+  eth_dbg.phy_physcsr = 0xFFFFFFFFU;
+  eth_dbg.phy_bsr_latched = 0xFFFFFFFFU;
+
+  if(addr > 31U)
+  {
+    return;
+  }
+
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_BCR, &value) == 0) { eth_dbg.phy_bcr = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_BSR, &value) == 0) { eth_dbg.phy_bsr_latched = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_BSR, &value) == 0) { eth_dbg.phy_bsr = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_PHYI1R, &value) == 0) { eth_dbg.phy_id1 = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_PHYI2R, &value) == 0) { eth_dbg.phy_id2 = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_ANAR, &value) == 0) { eth_dbg.phy_anar = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_ANLPAR, &value) == 0) { eth_dbg.phy_anlpar = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_ANER, &value) == 0) { eth_dbg.phy_aner = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_MCSR, &value) == 0) { eth_dbg.phy_mcsr = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_SMR, &value) == 0) { eth_dbg.phy_smr = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_TPDCR, &value) == 0) { eth_dbg.phy_tpdcr = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_TCSR, &value) == 0) { eth_dbg.phy_tcsr = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_SCSIR, &value) == 0) { eth_dbg.phy_scsir = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_ISFR, &value) == 0) { eth_dbg.phy_isfr = value; }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_PHYSCSR, &value) == 0) { eth_dbg.phy_physcsr = value; }
+  ETH_DebugDecodeLan8720();
+}
+
+static void ETH_DebugDecodeLan8720(void)
+{
+  uint32_t phyid1 = eth_dbg.phy_id1 & 0xFFFFU;
+  uint32_t phyid2 = eth_dbg.phy_id2 & 0xFFFFU;
+  uint32_t bcr = eth_dbg.phy_bcr & 0xFFFFU;
+  uint32_t bsr = eth_dbg.phy_bsr & 0xFFFFU;
+  uint32_t mcsr = eth_dbg.phy_mcsr & 0xFFFFU;
+  uint32_t smr = eth_dbg.phy_smr & 0xFFFFU;
+  uint32_t scsir = eth_dbg.phy_scsir & 0xFFFFU;
+  uint32_t physcsr = eth_dbg.phy_physcsr & 0xFFFFU;
+
+  eth_dbg.lan8720_phy_addr_ok = (eth_dbg.phy_dev_addr <= 31U) ? 1U : 0U;
+  eth_dbg.lan8720_oui = ((phyid1 << 6) | ((phyid2 >> 10) & 0x3FU)) & 0xFFFFFFU;
+  eth_dbg.lan8720_model = (phyid2 >> 4) & 0x3FU;
+  eth_dbg.lan8720_rev = phyid2 & 0x0FU;
+  eth_dbg.lan8720_mode = (smr & LAN8742_SMR_MODE) >> LAN8720_SMR_MODE_SHIFT;
+  eth_dbg.lan8720_phy_addr_strap = smr & LAN8742_SMR_PHY_ADDR;
+
+  eth_dbg.lan8720_link_bit = ((bsr & LAN8742_BSR_LINK_STATUS) != 0U) ? 1U : 0U;
+  eth_dbg.lan8720_autoneg_ability = ((bsr & LAN8742_BSR_AUTONEGO_ABILITY) != 0U) ? 1U : 0U;
+  eth_dbg.lan8720_autoneg_complete = ((bsr & LAN8742_BSR_AUTONEGO_CPLT) != 0U) ? 1U : 0U;
+  eth_dbg.lan8720_remote_fault = ((bsr & LAN8742_BSR_REMOTE_FAULT) != 0U) ? 1U : 0U;
+  eth_dbg.lan8720_energy_on = ((mcsr & LAN8742_MCSR_ENERGYON) != 0U) ? 1U : 0U;
+  eth_dbg.lan8720_amdix_disabled = ((scsir & LAN8720_SCSIR_AMDIXCTRL_DISABLE) != 0U) ? 1U : 0U;
+  eth_dbg.lan8720_auto_mdix = (eth_dbg.lan8720_amdix_disabled == 0U) ? 1U : 0U;
+  eth_dbg.lan8720_mdix_state = ((scsir & LAN8742_SCSIR_CHANNEL_SELECT) != 0U) ? 1U : 0U;
+  eth_dbg.phy_loopback_on = ((bcr & LAN8742_BCR_LOOPBACK) != 0U) ? 1U : 0U;
+  eth_dbg.phy_power_down = ((bcr & LAN8742_BCR_POWER_DOWN) != 0U) ? 1U : 0U;
+  eth_dbg.phy_isolate = ((bcr & LAN8742_BCR_ISOLATE) != 0U) ? 1U : 0U;
+  eth_dbg.phy_autoneg_en = ((bcr & LAN8742_BCR_AUTONEGO_EN) != 0U) ? 1U : 0U;
+  eth_dbg.phy_restart_autoneg = ((bcr & LAN8742_BCR_RESTART_AUTONEGO) != 0U) ? 1U : 0U;
+  eth_dbg.phy_normal_mode = ((eth_dbg.phy_loopback_on == 0U) &&
+                             (eth_dbg.phy_power_down == 0U) &&
+                             (eth_dbg.phy_isolate == 0U) &&
+                             (eth_dbg.phy_autoneg_en != 0U) &&
+                             (eth_dbg.lan8720_auto_mdix != 0U)) ? 1U : 0U;
+
+  eth_dbg.lan8720_speed_100 = 0U;
+  eth_dbg.lan8720_full_duplex = 0U;
+
+  if((physcsr & LAN8742_PHYSCSR_HCDSPEEDMASK) == LAN8742_PHYSCSR_100BTX_FD)
+  {
+    eth_dbg.lan8720_speed_100 = 1U;
+    eth_dbg.lan8720_full_duplex = 1U;
+  }
+  else if((physcsr & LAN8742_PHYSCSR_HCDSPEEDMASK) == LAN8742_PHYSCSR_100BTX_HD)
+  {
+    eth_dbg.lan8720_speed_100 = 1U;
+  }
+  else if((physcsr & LAN8742_PHYSCSR_HCDSPEEDMASK) == LAN8742_PHYSCSR_10BT_FD)
+  {
+    eth_dbg.lan8720_full_duplex = 1U;
+  }
+}
+
+static int32_t ETH_PHY_RestoreNormalMode(void)
+{
+  uint32_t addr = LAN8742.DevAddr;
+  uint32_t bcr;
+  uint32_t smr;
+  uint32_t scsir;
+  int32_t result;
+  uint32_t timeout;
+
+  if(addr > 31U)
+  {
+    return LAN8742_STATUS_ADDRESS_ERROR;
+  }
+
+  result = ETH_PHY_IO_ReadReg(addr, LAN8742_SMR, &smr);
+  if(result != 0)
+  {
+    return result;
+  }
+
+  /*
+   * The board currently straps MODE[2:0] as 001. Software-reset configuration
+   * can use the writable SMR mode bits, so force "all capable/autoneg enabled"
+   * here while preserving the PHY address strap bits.
+   */
+  smr = LAN8720_SMR_MODE_WRITE_ONE |
+        LAN8720_SMR_MODE_ALL_CAPABLE |
+        (smr & LAN8742_SMR_PHY_ADDR);
+  result = ETH_PHY_IO_WriteReg(addr, LAN8742_SMR, smr);
+  if(result != 0)
+  {
+    return result;
+  }
+
+  result = ETH_PHY_IO_WriteReg(addr, LAN8742_BCR, LAN8742_BCR_SOFT_RESET);
+  if(result != 0)
+  {
+    return result;
+  }
+
+  timeout = HAL_GetTick();
+  do
+  {
+    if(ETH_PHY_IO_ReadReg(addr, LAN8742_BCR, &bcr) != 0)
+    {
+      return LAN8742_STATUS_READ_ERROR;
+    }
+  } while(((bcr & LAN8742_BCR_SOFT_RESET) != 0U) &&
+          ((HAL_GetTick() - timeout) < 500U));
+
+  if((bcr & LAN8742_BCR_SOFT_RESET) != 0U)
+  {
+    return LAN8742_STATUS_RESET_TIMEOUT;
+  }
+
+  result = ETH_PHY_IO_ReadReg(addr, LAN8742_SCSIR, &scsir);
+  if(result != 0)
+  {
+    return result;
+  }
+
+  /* Normal direct-PC mode: enable Auto-MDIX and let autonegotiation decide speed/duplex. */
+  scsir &= ~(uint32_t)LAN8720_SCSIR_AMDIXCTRL_DISABLE;
+  scsir &= ~(uint32_t)LAN8742_SCSIR_CHANNEL_SELECT;
+  result = ETH_PHY_IO_WriteReg(addr, LAN8742_SCSIR, scsir);
+  if(result != 0)
+  {
+    return result;
+  }
+
+  result = ETH_PHY_IO_WriteReg(addr, LAN8742_ANAR, LAN8720_ANAR_ALL_CAPABLE);
+  if(result != 0)
+  {
+    return result;
+  }
+
+  return ETH_PHY_IO_WriteReg(addr, LAN8742_BCR,
+                             LAN8742_BCR_AUTONEGO_EN |
+                             LAN8742_BCR_RESTART_AUTONEGO);
+}
+
+static int32_t ETH_DebugForceNetifUp(int32_t link_state)
+{
+  ETH_MACConfigTypeDef mac_cfg = {0};
+  uint32_t speed = ETH_SPEED_100M;
+  uint32_t duplex = ETH_FULLDUPLEX_MODE;
+  uint32_t bcr = LAN8742_BCR_SPEED_SELECT | LAN8742_BCR_DUPLEX_MODE;
+
+  if(eth_dbg_netif == NULL)
+  {
+    return LAN8742_STATUS_ERROR;
+  }
+
+  switch(link_state)
+  {
+  case LAN8742_STATUS_100MBITS_FULLDUPLEX:
+    speed = ETH_SPEED_100M;
+    duplex = ETH_FULLDUPLEX_MODE;
+    bcr = LAN8742_BCR_SPEED_SELECT | LAN8742_BCR_DUPLEX_MODE;
+    break;
+
+  case LAN8742_STATUS_100MBITS_HALFDUPLEX:
+    speed = ETH_SPEED_100M;
+    duplex = ETH_HALFDUPLEX_MODE;
+    bcr = LAN8742_BCR_SPEED_SELECT;
+    break;
+
+  case LAN8742_STATUS_10MBITS_FULLDUPLEX:
+    speed = ETH_SPEED_10M;
+    duplex = ETH_FULLDUPLEX_MODE;
+    bcr = LAN8742_BCR_DUPLEX_MODE;
+    break;
+
+  case LAN8742_STATUS_10MBITS_HALFDUPLEX:
+    speed = ETH_SPEED_10M;
+    duplex = ETH_HALFDUPLEX_MODE;
+    bcr = 0U;
+    break;
+
+  default:
+    return LAN8742_STATUS_ERROR;
+  }
+
+  if(LAN8742.DevAddr <= 31U)
+  {
+    (void)ETH_PHY_IO_WriteReg(LAN8742.DevAddr, LAN8742_BCR, bcr);
+  }
+
+  HAL_ETH_GetMACConfig(&heth, &mac_cfg);
+  mac_cfg.Speed = speed;
+  mac_cfg.DuplexMode = duplex;
+  HAL_ETH_SetMACConfig(&heth, &mac_cfg);
+
+  HAL_ETH_Start_IT(&heth);
+  netif_set_up(eth_dbg_netif);
+  netif_set_link_up(eth_dbg_netif);
+
+  eth_dbg.force_netif_up = 1U;
+  eth_dbg.force_up_count++;
+  eth_dbg.force_link_state = link_state;
+  eth_dbg.netif_up = netif_is_up(eth_dbg_netif) ? 1U : 0U;
+  eth_dbg.netif_link_up = netif_is_link_up(eth_dbg_netif) ? 1U : 0U;
+
+  return LAN8742_STATUS_OK;
+}
+
+static int32_t ETH_DebugSendArpAnnouncement(void)
+{
+  err_t err;
+
+  if(eth_dbg_netif == NULL)
+  {
+    return LAN8742_STATUS_ERROR;
+  }
+
+  eth_dbg.arp_announce_count++;
+  err = etharp_gratuitous(eth_dbg_netif);
+  eth_dbg.arp_announce_result = (int32_t)err;
+
+  return (err == ERR_OK) ? LAN8742_STATUS_OK : LAN8742_STATUS_ERROR;
+}
+
+static void ETH_DebugSampleRmiiRxPins(uint32_t samples)
+{
+  uint32_t i;
+  uint32_t sample;
+  uint32_t last_sample;
+
+  eth_dbg.rmii_sample_count = samples;
+  eth_dbg.rmii_crs_dv_high_count = 0U;
+  eth_dbg.rmii_crs_dv_flip_count = 0U;
+  eth_dbg.rmii_rxd0_high_count = 0U;
+  eth_dbg.rmii_rxd0_flip_count = 0U;
+  eth_dbg.rmii_rxd1_high_count = 0U;
+  eth_dbg.rmii_rxd1_flip_count = 0U;
+
+  last_sample = 0U;
+  if((GPIOA->IDR & GPIO_PIN_7) != 0U) { last_sample |= 0x01U; }
+  if((GPIOC->IDR & GPIO_PIN_4) != 0U) { last_sample |= 0x02U; }
+  if((GPIOC->IDR & GPIO_PIN_5) != 0U) { last_sample |= 0x04U; }
+
+  eth_dbg.rmii_first_sample = last_sample;
+  eth_dbg.rmii_last_sample = last_sample;
+
+  for(i = 0U; i < samples; i++)
+  {
+    sample = 0U;
+    if((GPIOA->IDR & GPIO_PIN_7) != 0U) { sample |= 0x01U; }
+    if((GPIOC->IDR & GPIO_PIN_4) != 0U) { sample |= 0x02U; }
+    if((GPIOC->IDR & GPIO_PIN_5) != 0U) { sample |= 0x04U; }
+
+    if((sample & 0x01U) != 0U) { eth_dbg.rmii_crs_dv_high_count++; }
+    if((sample & 0x02U) != 0U) { eth_dbg.rmii_rxd0_high_count++; }
+    if((sample & 0x04U) != 0U) { eth_dbg.rmii_rxd1_high_count++; }
+
+    if(((sample ^ last_sample) & 0x01U) != 0U) { eth_dbg.rmii_crs_dv_flip_count++; }
+    if(((sample ^ last_sample) & 0x02U) != 0U) { eth_dbg.rmii_rxd0_flip_count++; }
+    if(((sample ^ last_sample) & 0x04U) != 0U) { eth_dbg.rmii_rxd1_flip_count++; }
+
+    last_sample = sample;
+  }
+
+  eth_dbg.rmii_last_sample = last_sample;
+}
+
+static void ETH_DebugWatchRmiiRxPins(uint32_t duration_ms)
+{
+  uint32_t start_tick;
+  uint32_t sample;
+  uint32_t last_sample;
+  uint32_t loops = 0U;
+
+  eth_dbg.rmii_sample_count = 0U;
+  eth_dbg.rmii_crs_dv_high_count = 0U;
+  eth_dbg.rmii_crs_dv_flip_count = 0U;
+  eth_dbg.rmii_rxd0_high_count = 0U;
+  eth_dbg.rmii_rxd0_flip_count = 0U;
+  eth_dbg.rmii_rxd1_high_count = 0U;
+  eth_dbg.rmii_rxd1_flip_count = 0U;
+
+  last_sample = 0U;
+  if((GPIOA->IDR & GPIO_PIN_7) != 0U) { last_sample |= 0x01U; }
+  if((GPIOC->IDR & GPIO_PIN_4) != 0U) { last_sample |= 0x02U; }
+  if((GPIOC->IDR & GPIO_PIN_5) != 0U) { last_sample |= 0x04U; }
+
+  eth_dbg.rmii_first_sample = last_sample;
+  eth_dbg.rmii_last_sample = last_sample;
+
+  start_tick = HAL_GetTick();
+  do
+  {
+    sample = 0U;
+    if((GPIOA->IDR & GPIO_PIN_7) != 0U) { sample |= 0x01U; }
+    if((GPIOC->IDR & GPIO_PIN_4) != 0U) { sample |= 0x02U; }
+    if((GPIOC->IDR & GPIO_PIN_5) != 0U) { sample |= 0x04U; }
+
+    if((sample & 0x01U) != 0U) { eth_dbg.rmii_crs_dv_high_count++; }
+    if((sample & 0x02U) != 0U) { eth_dbg.rmii_rxd0_high_count++; }
+    if((sample & 0x04U) != 0U) { eth_dbg.rmii_rxd1_high_count++; }
+
+    if(((sample ^ last_sample) & 0x01U) != 0U) { eth_dbg.rmii_crs_dv_flip_count++; }
+    if(((sample ^ last_sample) & 0x02U) != 0U) { eth_dbg.rmii_rxd0_flip_count++; }
+    if(((sample ^ last_sample) & 0x04U) != 0U) { eth_dbg.rmii_rxd1_flip_count++; }
+
+    last_sample = sample;
+    loops++;
+  } while((HAL_GetTick() - start_tick) < duration_ms);
+
+  eth_dbg.rmii_sample_count = loops;
+  eth_dbg.rmii_last_sample = last_sample;
+}
+
+static void ETH_DebugWatchRmiiTxPins(uint32_t duration_ms)
+{
+  uint32_t start_tick;
+  uint32_t sample;
+  uint32_t last_sample;
+  uint32_t loops = 0U;
+
+  eth_dbg.rmii_tx_sample_count = 0U;
+  eth_dbg.rmii_tx_en_high_count = 0U;
+  eth_dbg.rmii_tx_en_flip_count = 0U;
+  eth_dbg.rmii_txd0_high_count = 0U;
+  eth_dbg.rmii_txd0_flip_count = 0U;
+  eth_dbg.rmii_txd1_high_count = 0U;
+  eth_dbg.rmii_txd1_flip_count = 0U;
+
+  last_sample = 0U;
+  if((GPIOG->IDR & GPIO_PIN_11) != 0U) { last_sample |= 0x01U; }
+  if((GPIOG->IDR & GPIO_PIN_13) != 0U) { last_sample |= 0x02U; }
+  if((GPIOG->IDR & GPIO_PIN_14) != 0U) { last_sample |= 0x04U; }
+
+  eth_dbg.rmii_tx_first_sample = last_sample;
+  eth_dbg.rmii_tx_last_sample = last_sample;
+
+  start_tick = HAL_GetTick();
+  do
+  {
+    sample = 0U;
+    if((GPIOG->IDR & GPIO_PIN_11) != 0U) { sample |= 0x01U; }
+    if((GPIOG->IDR & GPIO_PIN_13) != 0U) { sample |= 0x02U; }
+    if((GPIOG->IDR & GPIO_PIN_14) != 0U) { sample |= 0x04U; }
+
+    if((sample & 0x01U) != 0U) { eth_dbg.rmii_tx_en_high_count++; }
+    if((sample & 0x02U) != 0U) { eth_dbg.rmii_txd0_high_count++; }
+    if((sample & 0x04U) != 0U) { eth_dbg.rmii_txd1_high_count++; }
+
+    if(((sample ^ last_sample) & 0x01U) != 0U) { eth_dbg.rmii_tx_en_flip_count++; }
+    if(((sample ^ last_sample) & 0x02U) != 0U) { eth_dbg.rmii_txd0_flip_count++; }
+    if(((sample ^ last_sample) & 0x04U) != 0U) { eth_dbg.rmii_txd1_flip_count++; }
+
+    last_sample = sample;
+    loops++;
+  } while((HAL_GetTick() - start_tick) < duration_ms);
+
+  eth_dbg.rmii_tx_sample_count = loops;
+  eth_dbg.rmii_tx_last_sample = last_sample;
+}
+
+static void ETH_DebugCaptureTxState(void)
+{
+  eth_dbg.last_hal_error = HAL_ETH_GetError(&heth);
+  eth_dbg.tx_dma_csr = ETH->DMACSR;
+  eth_dbg.tx_maccr = ETH->MACCR;
+  eth_dbg.tx_mtl_tqdr = ETH->MTLTQDR;
+  eth_dbg.tx_desc_tdes0 = DMATxDscrTab[0].DESC0;
+  eth_dbg.tx_desc_tdes1 = DMATxDscrTab[0].DESC1;
+  eth_dbg.tx_desc_tdes2 = DMATxDscrTab[0].DESC2;
+  eth_dbg.tx_desc_tdes3 = DMATxDscrTab[0].DESC3;
+}
+
+static int32_t ETH_DebugRunCableDiagnostic(void)
+{
+  uint32_t addr = LAN8742.DevAddr;
+  uint32_t value = 0U;
+  uint32_t i;
+  int32_t result;
+
+  if(addr > 31U)
+  {
+    return LAN8742_STATUS_ADDRESS_ERROR;
+  }
+
+  eth_dbg.cable_diag_count++;
+  eth_dbg.phy_tpdcr = 0xFFFFFFFFU;
+  eth_dbg.phy_tcsr = 0xFFFFFFFFU;
+  eth_dbg.phy_tcsr_after_start = 0xFFFFFFFFU;
+  eth_dbg.cable_diag_status = 0xFFFFFFFFU;
+  eth_dbg.cable_diag_type = 0xFFFFFFFFU;
+  eth_dbg.cable_diag_length = 0xFFFFFFFFU;
+
+  result = ETH_PHY_IO_ReadReg(addr, LAN8742_TPDCR, &value);
+  if(result != 0)
+  {
+    return result;
+  }
+  eth_dbg.phy_tpdcr = value;
+
+  result = ETH_PHY_IO_ReadReg(addr, LAN8742_TCSR, &value);
+  if(result != 0)
+  {
+    return result;
+  }
+  eth_dbg.phy_tcsr = value;
+
+  result = ETH_PHY_IO_WriteReg(addr, LAN8742_TCSR, value | LAN8742_TCSR_TDR_ENABLE);
+  if(result != 0)
+  {
+    return result;
+  }
+
+  for(i = 0U; i < 100U; i++)
+  {
+    result = ETH_PHY_IO_ReadReg(addr, LAN8742_TCSR, &value);
+    if(result != 0)
+    {
+      return result;
+    }
+
+    eth_dbg.phy_tcsr_after_start = value;
+    if((value & LAN8742_TCSR_TDR_ENABLE) == 0U)
+    {
+      break;
+    }
+    osDelay(1U);
+  }
+
+  eth_dbg.cable_diag_status = (value & LAN8742_TCSR_TDR_CH_STATUS) ? 1U : 0U;
+  eth_dbg.cable_diag_type = (value & LAN8742_TCSR_TDR_CH_CABLE_TYPE) >> 9U;
+  eth_dbg.cable_diag_length = value & LAN8742_TCSR_TDR_CH_LENGTH;
+
+  return LAN8742_STATUS_OK;
+}
+
+static void ETH_DebugHandleCommand(void)
+{
+  uint32_t addr = LAN8742.DevAddr;
+  uint32_t cmd = eth_dbg.cmd;
+  uint32_t bcr = 0U;
+  uint32_t scsir = 0U;
+  int32_t result = LAN8742_STATUS_OK;
+
+  if(cmd == 0U)
+  {
+    return;
+  }
+
+  if(addr > 31U)
+  {
+    eth_dbg.cmd_result = LAN8742_STATUS_ADDRESS_ERROR;
+    eth_dbg.cmd = 0U;
+    return;
+  }
+
+  switch(cmd)
+  {
+  case 1U:
+    result = ETH_PHY_IO_WriteReg(addr, LAN8742_BCR, LAN8742_BCR_SOFT_RESET);
+    break;
+
+  case 2U:
+    result = ETH_PHY_IO_ReadReg(addr, LAN8742_BCR, &bcr);
+    if(result == 0)
+    {
+      bcr |= (LAN8742_BCR_AUTONEGO_EN | LAN8742_BCR_RESTART_AUTONEGO);
+      result = ETH_PHY_IO_WriteReg(addr, LAN8742_BCR, bcr);
+    }
+    break;
+
+  case 3U:
+    result = ETH_PHY_IO_WriteReg(addr, LAN8742_BCR,
+                                 LAN8742_BCR_SPEED_SELECT |
+                                 LAN8742_BCR_DUPLEX_MODE);
+    break;
+
+  case 4U:
+    result = ETH_PHY_IO_WriteReg(addr, LAN8742_BCR,
+                                 LAN8742_BCR_SPEED_SELECT);
+    break;
+
+  case 5U:
+    result = ETH_PHY_IO_WriteReg(addr, LAN8742_BCR,
+                                 LAN8742_BCR_DUPLEX_MODE);
+    break;
+
+  case 6U:
+    result = ETH_PHY_IO_WriteReg(addr, LAN8742_BCR, 0U);
+    break;
+
+  case 7U:
+    result = ETH_PHY_IO_WriteReg(addr, LAN8742_BCR,
+                                 LAN8742_BCR_LOOPBACK |
+                                 LAN8742_BCR_SPEED_SELECT |
+                                 LAN8742_BCR_DUPLEX_MODE);
+    break;
+
+  case 8U:
+    ETH_DebugScanPhy();
+    ETH_DebugReadPhyRegs();
+    result = LAN8742_STATUS_OK;
+    break;
+
+  case 9U:
+    /* LAN8720A reg27[15]=0: enable Auto-MDIX */
+    result = ETH_PHY_IO_ReadReg(addr, LAN8742_SCSIR, &scsir);
+    if(result == 0)
+    {
+      scsir &= ~(uint32_t)LAN8720_SCSIR_AMDIXCTRL_DISABLE;
+      scsir &= ~(uint32_t)LAN8742_SCSIR_CHANNEL_SELECT;
+      result = ETH_PHY_IO_WriteReg(addr, LAN8742_SCSIR, scsir);
+    }
+    break;
+
+  case 10U:
+    /* LAN8720A reg27[15]=1, [13]=0: disable Auto-MDIX, force MDI */
+    result = ETH_PHY_IO_ReadReg(addr, LAN8742_SCSIR, &scsir);
+    if(result == 0)
+    {
+      scsir |= LAN8720_SCSIR_AMDIXCTRL_DISABLE;
+      scsir &= ~(uint32_t)LAN8742_SCSIR_CHANNEL_SELECT;
+      result = ETH_PHY_IO_WriteReg(addr, LAN8742_SCSIR, scsir);
+    }
+    break;
+
+  case 11U:
+    /* LAN8720A reg27[15]=1, [13]=1: disable Auto-MDIX, force MDIX */
+    result = ETH_PHY_IO_ReadReg(addr, LAN8742_SCSIR, &scsir);
+    if(result == 0)
+    {
+      scsir |= LAN8720_SCSIR_AMDIXCTRL_DISABLE;
+      scsir |= LAN8742_SCSIR_CHANNEL_SELECT;
+      result = ETH_PHY_IO_WriteReg(addr, LAN8742_SCSIR, scsir);
+    }
+    break;
+
+  case 12U:
+    ETH_DebugSampleRefClk((eth_dbg.cmd_arg == 0U) ? 100000U : eth_dbg.cmd_arg);
+    result = LAN8742_STATUS_OK;
+    break;
+
+  case 13U:
+    ETH_DebugRunLoopbackTest();
+    result = LAN8742_STATUS_OK;
+    break;
+
+  case 14U:
+    ETH_DebugReadPhyRegs();
+    result = LAN8742_STATUS_OK;
+    break;
+
+  case 15U:
+    eth_dbg.force_netif_up = 0U;
+    result = ETH_PHY_RestoreNormalMode();
+    break;
+
+  case 16U:
+    result = ETH_DebugForceNetifUp(LAN8742_STATUS_100MBITS_FULLDUPLEX);
+    break;
+
+  case 17U:
+    result = ETH_DebugForceNetifUp(LAN8742_STATUS_100MBITS_HALFDUPLEX);
+    break;
+
+  case 18U:
+    result = ETH_DebugForceNetifUp(LAN8742_STATUS_10MBITS_FULLDUPLEX);
+    break;
+
+  case 19U:
+    result = ETH_DebugForceNetifUp(LAN8742_STATUS_10MBITS_HALFDUPLEX);
+    break;
+
+  case 20U:
+    result = ETH_DebugSendArpAnnouncement();
+    break;
+
+  case 21U:
+    ETH_DebugSampleRmiiRxPins((eth_dbg.cmd_arg == 0U) ? 200000U : eth_dbg.cmd_arg);
+    result = LAN8742_STATUS_OK;
+    break;
+
+  case 22U:
+    ETH_DebugWatchRmiiRxPins((eth_dbg.cmd_arg == 0U) ? 3000U : eth_dbg.cmd_arg);
+    result = LAN8742_STATUS_OK;
+    break;
+
+  case 23U:
+    ETH_DebugCaptureTxState();
+    result = LAN8742_STATUS_OK;
+    break;
+
+  case 24U:
+    ETH_DebugWatchRmiiTxPins((eth_dbg.cmd_arg == 0U) ? 3000U : eth_dbg.cmd_arg);
+    result = LAN8742_STATUS_OK;
+    break;
+
+  case 25U:
+    result = ETH_DebugRunCableDiagnostic();
+    break;
+
+  default:
+    result = LAN8742_STATUS_ERROR;
+    break;
+  }
+
+  eth_dbg.cmd_result = result;
+  eth_dbg.cmd_count++;
+  eth_dbg.cmd = 0U;
+  ETH_DebugReadPhyRegs();
+}
+
+static void ETH_DebugSampleRefClk(uint32_t samples)
+{
+  uint32_t i;
+  uint32_t level;
+  uint32_t last_level;
+
+  eth_dbg.refclk_sample_count = samples;
+  eth_dbg.refclk_flip_count = 0U;
+  eth_dbg.refclk_high_count = 0U;
+  eth_dbg.refclk_low_count = 0U;
+
+  last_level = ((GPIOA->IDR & GPIO_PIN_1) != 0U) ? 1U : 0U;
+  eth_dbg.refclk_first_level = last_level;
+  eth_dbg.refclk_last_level = last_level;
+
+  for(i = 0U; i < samples; i++)
+  {
+    level = ((GPIOA->IDR & GPIO_PIN_1) != 0U) ? 1U : 0U;
+
+    if(level != 0U)
+    {
+      eth_dbg.refclk_high_count++;
+    }
+    else
+    {
+      eth_dbg.refclk_low_count++;
+    }
+
+    if(level != last_level)
+    {
+      eth_dbg.refclk_flip_count++;
+      last_level = level;
+    }
+  }
+
+  eth_dbg.refclk_last_level = last_level;
+}
+
+static void ETH_DebugRunLoopbackTest(void)
+{
+  static uint8_t frame[60];
+  uint8_t rx_copy[64] = {0};
+  ETH_BufferTypeDef tx_buffer = {0};
+  ETH_TxPacketConfigTypeDef test_cfg = {0};
+  ETH_MACConfigTypeDef mac_cfg = {0};
+  struct pbuf *p = NULL;
+  struct pbuf *rx_p = NULL;
+  uint32_t i;
+  uint16_t rx_len = 0U;
+  const uint32_t magic = 0x5AA55AA5U;
+  uint32_t addr = LAN8742.DevAddr;
+
+  eth_dbg.loop_cmd_count++;
+  eth_dbg.loop_tx_status = -1;
+  eth_dbg.loop_rx_status = -1;
+  eth_dbg.loop_rx_len = 0U;
+  eth_dbg.loop_match = 0U;
+  eth_dbg.loop_magic = magic;
+  eth_dbg.loop_maccr = ETH->MACCR;
+  eth_dbg.loop_dma_csr = ETH->DMACSR;
+  eth_dbg.loop_mtl_rxq = ETH->MTLRQDR;
+  eth_dbg.loop_mtl_txq = ETH->MTLTQDR;
+  eth_dbg.loop_poll_reads = 0U;
+  eth_dbg.loop_poll_hit = 0U;
+
+  if(addr <= 31U)
+  {
+    (void)ETH_PHY_IO_WriteReg(addr, LAN8742_BCR,
+                              LAN8742_BCR_LOOPBACK |
+                              LAN8742_BCR_SPEED_SELECT |
+                              LAN8742_BCR_DUPLEX_MODE);
+  }
+
+  HAL_ETH_GetMACConfig(&heth, &mac_cfg);
+  mac_cfg.Speed = ETH_SPEED_100M;
+  mac_cfg.DuplexMode = ETH_FULLDUPLEX_MODE;
+  HAL_ETH_SetMACConfig(&heth, &mac_cfg);
+
+  for(i = 0U; i < 6U; i++)
+  {
+    frame[i] = heth.Init.MACAddr[i];
+    frame[6U + i] = heth.Init.MACAddr[i];
+  }
+
+  frame[12] = 0x88U;
+  frame[13] = 0xB5U;
+
+  frame[14] = (uint8_t)(magic >> 24);
+  frame[15] = (uint8_t)(magic >> 16);
+  frame[16] = (uint8_t)(magic >> 8);
+  frame[17] = (uint8_t)(magic);
+
+  for(i = 18U; i < sizeof(frame); i++)
+  {
+    frame[i] = (uint8_t)i;
+  }
+
+  tx_buffer.buffer = frame;
+  tx_buffer.len = sizeof(frame);
+  tx_buffer.next = NULL;
+
+  test_cfg.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
+  test_cfg.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
+  test_cfg.CRCPadCtrl = ETH_CRC_PAD_INSERT;
+  test_cfg.Length = sizeof(frame);
+  test_cfg.TxBuffer = &tx_buffer;
+  test_cfg.pData = NULL;
+
+  (void)HAL_ETH_Start_IT(&heth);
+  eth_dbg.loop_tx_status = (int32_t)HAL_ETH_Transmit(&heth, &test_cfg, 100U);
+  eth_dbg.loop_maccr = ETH->MACCR;
+  eth_dbg.loop_dma_csr = ETH->DMACSR;
+  eth_dbg.loop_mtl_rxq = ETH->MTLRQDR;
+  eth_dbg.loop_mtl_txq = ETH->MTLTQDR;
+
+  for(i = 0U; i < 200U; i++)
+  {
+    rx_p = NULL;
+    eth_dbg.loop_poll_reads++;
+    if(HAL_ETH_ReadData(&heth, (void **)&rx_p) == HAL_OK && rx_p != NULL)
+    {
+      eth_dbg.loop_poll_hit++;
+      eth_dbg.loop_rx_status = 0;
+      p = rx_p;
+      break;
+    }
+    osDelay(1U);
+  }
+
+  eth_dbg.loop_dma_csr = ETH->DMACSR;
+  eth_dbg.loop_mtl_rxq = ETH->MTLRQDR;
+  eth_dbg.loop_mtl_txq = ETH->MTLTQDR;
+
+  if(p != NULL)
+  {
+      rx_len = p->tot_len;
+      eth_dbg.loop_rx_len = rx_len;
+
+      if(rx_len >= 18U)
+      {
+        pbuf_copy_partial(p, rx_copy, (rx_len > sizeof(rx_copy)) ? sizeof(rx_copy) : rx_len, 0U);
+
+        if((rx_copy[12] == 0x88U) &&
+           (rx_copy[13] == 0xB5U) &&
+           (rx_copy[14] == (uint8_t)(magic >> 24)) &&
+           (rx_copy[15] == (uint8_t)(magic >> 16)) &&
+           (rx_copy[16] == (uint8_t)(magic >> 8)) &&
+           (rx_copy[17] == (uint8_t)(magic)))
+        {
+          eth_dbg.loop_match = 1U;
+        }
+      }
+
+      pbuf_free(p);
+  }
+  else
+  {
+    eth_dbg.loop_rx_status = -1;
+  }
+
+  eth_dbg.loop_dma_csr = ETH->DMACSR;
+  eth_dbg.loop_mtl_rxq = ETH->MTLRQDR;
+  eth_dbg.loop_mtl_txq = ETH->MTLTQDR;
+
+  /* Leave the PHY usable for cable tests after the internal loopback probe. */
+  (void)ETH_PHY_RestoreNormalMode();
+}
+
+static int32_t ETH_PHY_GetLinkStateCompat(void)
+{
+  uint32_t addr = LAN8742.DevAddr;
+  uint32_t bcr = 0U;
+  uint32_t bsr_latched = 0U;
+  uint32_t bsr = 0U;
+  uint32_t anar = 0U;
+  uint32_t anlpar = 0U;
+  uint32_t physcsr = 0U;
+  uint32_t common = 0U;
+
+  if(addr > 31U)
+  {
+    return LAN8742_STATUS_ADDRESS_ERROR;
+  }
+
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_BSR, &bsr_latched) != 0)
+  {
+    return LAN8742_STATUS_READ_ERROR;
+  }
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_BSR, &bsr) != 0)
+  {
+    return LAN8742_STATUS_READ_ERROR;
+  }
+  eth_dbg.phy_bsr_latched = bsr_latched;
+  eth_dbg.phy_bsr = bsr;
+  ETH_DebugDecodeLan8720();
+
+  if((bsr & LAN8742_BSR_LINK_STATUS) == 0U)
+  {
+#if (LAN8720_ASSUME_LINK_UP != 0U)
+    return LAN8720_ASSUME_LINK_STATE;
+#else
+    return LAN8742_STATUS_LINK_DOWN;
+#endif
+  }
+
+  if(ETH_PHY_IO_ReadReg(addr, LAN8742_BCR, &bcr) != 0)
+  {
+    return LAN8742_STATUS_READ_ERROR;
+  }
+
+  if((bcr & LAN8742_BCR_AUTONEGO_EN) == 0U)
+  {
+    if(((bcr & LAN8742_BCR_SPEED_SELECT) != 0U) && ((bcr & LAN8742_BCR_DUPLEX_MODE) != 0U))
+    {
+      return LAN8742_STATUS_100MBITS_FULLDUPLEX;
+    }
+    if((bcr & LAN8742_BCR_SPEED_SELECT) != 0U)
+    {
+      return LAN8742_STATUS_100MBITS_HALFDUPLEX;
+    }
+    if((bcr & LAN8742_BCR_DUPLEX_MODE) != 0U)
+    {
+      return LAN8742_STATUS_10MBITS_FULLDUPLEX;
+    }
+    return LAN8742_STATUS_10MBITS_HALFDUPLEX;
+  }
+
+  if((bsr & LAN8742_BSR_AUTONEGO_CPLT) != 0U)
+  {
+    if(ETH_PHY_IO_ReadReg(addr, LAN8742_PHYSCSR, &physcsr) == 0)
+    {
+      uint32_t speed_status = physcsr & LAN8742_PHYSCSR_HCDSPEEDMASK;
+      eth_dbg.phy_physcsr = physcsr;
+
+      if(((physcsr & 0xFFFFU) != 0xFFFFU) &&
+         ((physcsr & 0xFFFFU) != 0x0000U))
+      {
+        if(speed_status == LAN8742_PHYSCSR_100BTX_FD)
+        {
+          return LAN8742_STATUS_100MBITS_FULLDUPLEX;
+        }
+        if(speed_status == LAN8742_PHYSCSR_100BTX_HD)
+        {
+          return LAN8742_STATUS_100MBITS_HALFDUPLEX;
+        }
+        if(speed_status == LAN8742_PHYSCSR_10BT_FD)
+        {
+          return LAN8742_STATUS_10MBITS_FULLDUPLEX;
+        }
+        if(speed_status == LAN8742_PHYSCSR_10BT_HD)
+        {
+          return LAN8742_STATUS_10MBITS_HALFDUPLEX;
+        }
+      }
+    }
+  }
+
+  /*
+   * Some LAN8720A boards report the standard BSR link bit before the generated
+   * LAN8742 PHYSCSR/autoneg fields become trustworthy. If the PC already sees a
+   * cable, allow the MAC to come up and use ANAR/ANLPAR as the best available
+   * speed/duplex hint instead of keeping lwIP down forever.
+   */
+  if((ETH_PHY_IO_ReadReg(addr, LAN8742_ANAR, &anar) == 0) &&
+     (ETH_PHY_IO_ReadReg(addr, LAN8742_ANLPAR, &anlpar) == 0))
+  {
+    common = anar & anlpar;
+
+    if((common & LAN8742_ANLPAR_100BASE_TX_FD) != 0U)
+    {
+      return LAN8742_STATUS_100MBITS_FULLDUPLEX;
+    }
+    if((common & LAN8742_ANLPAR_100BASE_TX) != 0U)
+    {
+      return LAN8742_STATUS_100MBITS_HALFDUPLEX;
+    }
+    if((common & LAN8742_ANLPAR_10BASE_T_FD) != 0U)
+    {
+      return LAN8742_STATUS_10MBITS_FULLDUPLEX;
+    }
+    if((common & LAN8742_ANLPAR_10BASE_T) != 0U)
+    {
+      return LAN8742_STATUS_10MBITS_HALFDUPLEX;
+    }
+  }
+
+  return LAN8720_FALLBACK_LINK_STATE;
+}
 
 /* USER CODE END 4 */
 
@@ -218,21 +1431,20 @@ static void low_level_init(struct netif *netif)
   ETH_MACConfigTypeDef MACConf = {0};
   /* Start ETH HAL Init */
 
-   uint8_t MACAddr[6] ;
   heth.Instance = ETH;
-  MACAddr[0] = 0x00;
-  MACAddr[1] = 0x80;
-  MACAddr[2] = 0xE1;
-  MACAddr[3] = 0x00;
-  MACAddr[4] = 0x00;
-  MACAddr[5] = 0x00;
-  heth.Init.MACAddr = &MACAddr[0];
+  heth.Init.MACAddr = &ETH_MACAddr[0];
   heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
   heth.Init.TxDesc = DMATxDscrTab;
   heth.Init.RxDesc = DMARxDscrTab;
   heth.Init.RxBuffLen = 1536;
 
   /* USER CODE BEGIN MACADDRESS */
+  /*
+   * Keep the MAC address in static storage. CubeMX may regenerate a local
+   * MACAddr[] above; overriding the pointer here prevents heth.Init.MACAddr
+   * from pointing at a dead stack object after low_level_init() returns.
+   */
+  heth.Init.MACAddr = &ETH_MACAddr[0];
 
   /* USER CODE END MACADDRESS */
 
@@ -297,16 +1509,28 @@ static void low_level_init(struct netif *netif)
   LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
 
   /* Initialize the LAN8742 ETH PHY */
-  if(LAN8742_Init(&LAN8742) != LAN8742_STATUS_OK)
+  eth_dbg.hal_init_status = (int32_t)hal_eth_init_status;
+  eth_dbg.phy_init_status = LAN8742_Init(&LAN8742);
+//         (long)eth_dbg.phy_init_status, (unsigned long)LAN8742.DevAddr);
+  if(eth_dbg.phy_init_status != LAN8742_STATUS_OK)
   {
     netif_set_link_down(netif);
     netif_set_down(netif);
     return;
   }
 
+  /*
+   * LAN8720A cold power-up can be marginal if the MAC touches it while the
+   * 50 MHz RMII clock and strap/autoneg state are still settling. Do a PHY
+   * soft reset here, after MDIO works, then restart normal autoneg mode.
+   */
+  (void)ETH_PHY_RestoreNormalMode();
+  osDelay(LAN8720_PHY_RESET_SETTLE_MS);
+
   if (hal_eth_init_status == HAL_OK)
   {
-    PHYLinkState = LAN8742_GetLinkState(&LAN8742);
+    PHYLinkState = ETH_PHY_GetLinkStateCompat();
+    eth_dbg.phy_link_state = PHYLinkState;
 
     /* Get link state */
     if(PHYLinkState <= LAN8742_STATUS_LINK_DOWN)
@@ -342,15 +1566,19 @@ static void low_level_init(struct netif *netif)
 
     /* Get MAC Config MAC */
     HAL_ETH_GetMACConfig(&heth, &MACConf);
+//           (unsigned long)MACConf.Speed, (unsigned long)MACConf.DuplexMode);
     MACConf.DuplexMode = duplex;
     MACConf.Speed = speed;
     HAL_ETH_SetMACConfig(&heth, &MACConf);
 
     HAL_ETH_Start_IT(&heth);
-    /* Fix: HAL may not configure MACPFR; force accept broadcast+unicast */
-    if (heth.Instance->MACPFR == 0U) heth.Instance->MACPFR = 0x00000001U;
+//    { uint32_t macr=ETH->MACCR, dmactcr=ETH->DMACTCR, dmatdlar=ETH->DMACTDLAR;
+//           (unsigned long)macr, (unsigned long)dmactcr, (unsigned long)dmatdlar); }
     netif_set_up(netif);
     netif_set_link_up(netif);
+//           (speed==ETH_SPEED_100M)?"100M":"10M",
+//           (duplex==ETH_FULLDUPLEX_MODE)?"FD":"HD",
+//           (int)netif_is_up(netif), (int)netif_is_link_up(netif));
 
 /* USER CODE BEGIN PHY_POST_CONFIG */
 
@@ -365,6 +1593,9 @@ static void low_level_init(struct netif *netif)
 #endif /* LWIP_ARP || LWIP_ETHERNET */
 
 /* USER CODE BEGIN LOW_LEVEL_INIT */
+  eth_dbg.netif_up = netif_is_up(netif) ? 1U : 0U;
+  eth_dbg.netif_link_up = netif_is_link_up(netif) ? 1U : 0U;
+  ETH_DebugCaptureTxState();
 
 /* USER CODE END LOW_LEVEL_INIT */
 }
@@ -417,22 +1648,34 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 
   TxConfig.Length = p->tot_len;
   TxConfig.TxBuffer = Txbuffer;
+  TxConfig.pData = p;
+
   pbuf_ref(p);
 
-  /* Clean D-Cache so DMA sees payload */
-  { struct pbuf *q; for(q=p; q; q=q->next) SCB_CleanDCache_by_Addr((uint32_t*)q->payload, q->len); }
+  eth_dbg.tx_frame_count++;
+  eth_dbg.tx_byte_count += p->tot_len;
+  if(p->len >= 14U)
+  {
+    uint8_t *frame = (uint8_t *)p->payload;
+    eth_dbg.last_tx_ethertype = ((uint32_t)frame[12] << 8) | frame[13];
+  }
 
   do
   {
     if(HAL_ETH_Transmit_IT(&heth, &TxConfig) == HAL_OK)
     {
+      eth_dbg.tx_hal_ok_count++;
+      eth_dbg.last_hal_tx_status = HAL_OK;
       errval = ERR_OK;
     }
     else
     {
+      eth_dbg.last_hal_tx_status = HAL_ERROR;
+      eth_dbg.last_hal_error = HAL_ETH_GetError(&heth);
 
       if(HAL_ETH_GetError(&heth) & HAL_ETH_ERROR_BUSY)
       {
+        eth_dbg.tx_hal_busy_count++;
         /* Wait for descriptors to become available */
         osSemaphoreWait(TxPktSemaphore, ETHIF_TX_TIMEOUT);
         HAL_ETH_ReleaseTxPacket(&heth);
@@ -440,6 +1683,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
       }
       else
       {
+        eth_dbg.tx_hal_error_count++;
         /* Other error */
         pbuf_free(p);
         errval =  ERR_IF;
@@ -464,7 +1708,18 @@ static struct pbuf * low_level_input(struct netif *netif)
 
   if(RxAllocStatus == RX_ALLOC_OK)
   {
-    HAL_ETH_ReadData(&heth, (void **)&p);
+    eth_dbg.rx_input_stage = 2U;
+    eth_dbg.last_read_status = (int32_t)HAL_ETH_ReadData(&heth, (void **)&p);
+    if(p != NULL)
+    {
+      eth_dbg.rx_frame_count++;
+      eth_dbg.rx_byte_count += p->tot_len;
+      if(p->len >= 14U)
+      {
+        uint8_t *frame = (uint8_t *)p->payload;
+        eth_dbg.last_rx_ethertype = ((uint32_t)frame[12] << 8) | frame[13];
+      }
+    }
   }
 
   return p;
@@ -488,12 +1743,17 @@ static void ethernetif_input(void const * argument)
   {
     if (osSemaphoreWait(RxPktSemaphore, TIME_WAITING_FOR_INPUT) == osOK)
     {
+      eth_dbg.rx_input_stage = 1U;
+      eth_dbg.rx_input_wake_count++;
       do
       {
         p = low_level_input( netif );
         if (p != NULL)
         {
-          if (netif->input( p, netif) != ERR_OK )
+          eth_dbg.rx_input_stage = 3U;
+          eth_dbg.last_netif_input_result = (int32_t)netif->input( p, netif);
+          eth_dbg.rx_input_stage = 4U;
+          if (eth_dbg.last_netif_input_result != ERR_OK )
           {
             pbuf_free(p);
           }
@@ -672,6 +1932,26 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
     HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
   /* USER CODE BEGIN ETH_MspInit 1 */
+    /*
+     * CubeMX may regenerate the ETH GPIO blocks with LOW speed. Keep this
+     * user-section override so the 50 MHz RMII pins always use a fast driver.
+     */
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+
+    GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_5;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_7;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_13|GPIO_PIN_14;
+    HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+
+    HAL_NVIC_SetPriority(ETH_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(ETH_IRQn);
 
   /* USER CODE END ETH_MspInit 1 */
   }
@@ -707,6 +1987,7 @@ void HAL_ETH_MspDeInit(ETH_HandleTypeDef* ethHandle)
     HAL_GPIO_DeInit(GPIOG, GPIO_PIN_11|GPIO_PIN_13|GPIO_PIN_14);
 
   /* USER CODE BEGIN ETH_MspDeInit 1 */
+    HAL_NVIC_DisableIRQ(ETH_IRQn);
 
   /* USER CODE END ETH_MspDeInit 1 */
   }
@@ -728,13 +2009,11 @@ int32_t ETH_PHY_IO_Init(void)
 
   /* Configure the MDIO Clock */
   HAL_ETH_SetMDIOClockRange(&heth);
-
-  /* PHY nRST on PI3 */
   { GPIO_InitTypeDef g={0}; __HAL_RCC_GPIOI_CLK_ENABLE();
-    g.Pin=GPIO_PIN_3; g.Mode=GPIO_MODE_OUTPUT_PP; g.Pull=GPIO_NOPULL; g.Speed=GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOI,&g);
-    HAL_GPIO_WritePin(GPIOI,GPIO_PIN_3,GPIO_PIN_RESET); HAL_Delay(10);
-    HAL_GPIO_WritePin(GPIOI,GPIO_PIN_3,GPIO_PIN_SET);   HAL_Delay(50); }
+  g.Pin=GPIO_PIN_3; g.Mode=GPIO_MODE_OUTPUT_PP; g.Pull=GPIO_NOPULL; g.Speed=GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOI,&g);
+  HAL_GPIO_WritePin(GPIOI,GPIO_PIN_3,GPIO_PIN_RESET); HAL_Delay(10);
+  HAL_GPIO_WritePin(GPIOI,GPIO_PIN_3,GPIO_PIN_SET); HAL_Delay(50); }
 
   return 0;
 }
@@ -802,6 +2081,12 @@ void ethernet_link_thread(void const * argument)
   ETH_MACConfigTypeDef MACConf = {0};
   int32_t PHYLinkState = 0;
   uint32_t linkchanged = 0U, speed = 0U, duplex = 0U;
+  uint32_t last_rx_irq_count = 0U;
+  uint32_t last_tx_irq_count = 0U;
+  uint32_t last_rx_irq_watchdog_count = 0U;
+  uint32_t mac_idle_poll_count = 0U;
+  uint32_t rx_idle_poll_count = 0U;
+  uint32_t last_link_up = 0U;
 
   struct netif *netif = (struct netif *) argument;
 /* USER CODE BEGIN ETH link init */
@@ -810,13 +2095,17 @@ void ethernet_link_thread(void const * argument)
 
   for(;;)
   {
-  PHYLinkState = LAN8742_GetLinkState(&LAN8742);
+  linkchanged = 0U;
+  PHYLinkState = ETH_PHY_GetLinkStateCompat();
+  eth_dbg.phy_link_state = PHYLinkState;
+  eth_dbg.link_poll_count++;
 
   if(netif_is_link_up(netif) && (PHYLinkState <= LAN8742_STATUS_LINK_DOWN))
   {
     HAL_ETH_Stop_IT(&heth);
     netif_set_down(netif);
     netif_set_link_down(netif);
+    eth_dbg.link_down_poll_count++;
   }
   else if(!netif_is_link_up(netif) && (PHYLinkState > LAN8742_STATUS_LINK_DOWN))
   {
@@ -854,12 +2143,97 @@ void ethernet_link_thread(void const * argument)
       MACConf.Speed = speed;
       HAL_ETH_SetMACConfig(&heth, &MACConf);
       HAL_ETH_Start_IT(&heth);
+      eth_dbg.mac_restart_count++;
       netif_set_up(netif);
       netif_set_link_up(netif);
     }
   }
+  else if(!netif_is_link_up(netif))
+  {
+    eth_dbg.link_down_poll_count++;
+    if((eth_dbg.link_down_poll_count % 100U) == 0U)
+    {
+      (void)ETH_PHY_RestoreNormalMode();
+      eth_dbg.link_recover_count++;
+    }
+  }
+  else
+  {
+    eth_dbg.link_down_poll_count = 0U;
+  }
+
+  if(netif_is_link_up(netif))
+  {
+    if(last_link_up == 0U)
+    {
+      eth_dbg.link_flap_count++;
+      last_link_up = 1U;
+    }
+
+    if((eth_dbg.rx_irq_count == last_rx_irq_count) &&
+       (eth_dbg.tx_irq_count == last_tx_irq_count))
+    {
+      mac_idle_poll_count++;
+      eth_dbg.mac_watchdog_count = mac_idle_poll_count;
+      if(mac_idle_poll_count >= LAN8720_MAC_WATCHDOG_RESTART_POLLS)
+      {
+        (void)HAL_ETH_Stop_IT(&heth);
+        (void)HAL_ETH_Start_IT(&heth);
+        netif_set_up(netif);
+        netif_set_link_up(netif);
+        eth_dbg.mac_watchdog_restart_count++;
+        mac_idle_poll_count = 0U;
+      }
+    }
+    else
+    {
+      last_rx_irq_count = eth_dbg.rx_irq_count;
+      last_tx_irq_count = eth_dbg.tx_irq_count;
+      mac_idle_poll_count = 0U;
+      eth_dbg.mac_watchdog_count = 0U;
+    }
+
+    if(eth_dbg.rx_irq_count == last_rx_irq_watchdog_count)
+    {
+      rx_idle_poll_count++;
+      eth_dbg.rx_watchdog_count = rx_idle_poll_count;
+      if(rx_idle_poll_count >= LAN8720_RX_WATCHDOG_RESTART_POLLS)
+      {
+        (void)HAL_ETH_Stop_IT(&heth);
+        (void)HAL_ETH_Start_IT(&heth);
+        netif_set_up(netif);
+        netif_set_link_up(netif);
+        eth_dbg.rx_watchdog_restart_count++;
+        rx_idle_poll_count = 0U;
+      }
+    }
+    else
+    {
+      last_rx_irq_watchdog_count = eth_dbg.rx_irq_count;
+      rx_idle_poll_count = 0U;
+      eth_dbg.rx_watchdog_count = 0U;
+    }
+  }
+  else
+  {
+    if(last_link_up != 0U)
+    {
+      eth_dbg.link_flap_count++;
+      last_link_up = 0U;
+    }
+    last_rx_irq_count = eth_dbg.rx_irq_count;
+    last_tx_irq_count = eth_dbg.tx_irq_count;
+    last_rx_irq_watchdog_count = eth_dbg.rx_irq_count;
+    mac_idle_poll_count = 0U;
+    rx_idle_poll_count = 0U;
+    eth_dbg.mac_watchdog_count = 0U;
+    eth_dbg.rx_watchdog_count = 0U;
+  }
 
 /* USER CODE BEGIN ETH link Thread core code for User BSP */
+  ETH_DebugHandleCommand();
+  eth_dbg.netif_up = netif_is_up(netif) ? 1U : 0U;
+  eth_dbg.netif_link_up = netif_is_link_up(netif) ? 1U : 0U;
 
 /* USER CODE END ETH link Thread core code for User BSP */
 
@@ -884,6 +2258,7 @@ void HAL_ETH_RxAllocateCallback(uint8_t **buff)
   else
   {
     RxAllocStatus = RX_ALLOC_ERROR;
+    eth_dbg.rx_alloc_error_count++;
     *buff = NULL;
   }
 /* USER CODE END HAL ETH RxAllocateCallback */
