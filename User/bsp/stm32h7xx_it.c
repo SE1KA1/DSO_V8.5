@@ -66,6 +66,8 @@ volatile uint32_t g_fault_stacked_xpsr_fpu;
 volatile uint32_t g_fault_raw_ctx[8];
 volatile char     g_fault_task_name[12];
 
+extern ETH_HandleTypeDef heth;
+
 /*
  * 排障备忘（需与当前构建的 Listings/output.map 对照，重编后地址会变）：
  * - 典型堆叠 LR 0x08104C73 曾落在 STemWin GUIDRV_Lin_16 _FillRect (约 0x08104C55) 内。
@@ -235,6 +237,11 @@ void DebugMon_Handler(void)
   * @param  None
   * @retval None
   */
+void ETH_IRQHandler(void)
+{
+  HAL_ETH_IRQHandler(&heth);
+}
+
 /*void PPP_IRQHandler(void)
 {
 }*/

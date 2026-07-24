@@ -55,6 +55,7 @@
 
 
 /* 宏定义: configUSE_PREEMPTION - configUSE_PREEMPTION 的宏定义。 */
+#define configENABLE_FPU                         0
 #define configUSE_PREEMPTION					1
 /* 宏定义: configUSE_PORT_OPTIMISED_TASK_SELECTION - configUSE_PORT_OPTIMISED_TASK_SELECTION 的宏定义。 */
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION	1
@@ -69,11 +70,11 @@
 /* 宏定义: configTICK_RATE_HZ - configTICK_RATE_HZ 的宏定义。 */
 #define configTICK_RATE_HZ						( 1000 )
 /* 宏定义: configMAX_PRIORITIES - configMAX_PRIORITIES 的宏定义。 */
-#define configMAX_PRIORITIES					( 5 )
+#define configMAX_PRIORITIES					( 7 )
 /* 宏定义: configMINIMAL_STACK_SIZE - configMINIMAL_STACK_SIZE 的宏定义。 */
 #define configMINIMAL_STACK_SIZE				( ( unsigned short ) 130 )
 /* emWin/DSO 任务栈自 heap_4 分配；增大栈深后需同步加大堆，避免 xTaskCreate/pvPortMalloc 失败 */
-#define configTOTAL_HEAP_SIZE					( ( size_t ) ( 120 * 1024 ) )
+#define configTOTAL_HEAP_SIZE					( ( size_t ) ( 140 * 1024 ) )
 /* 宏定义: configMAX_TASK_NAME_LEN - configMAX_TASK_NAME_LEN 的宏定义。 */
 #define configMAX_TASK_NAME_LEN					( 10 )
 /* 宏定义: configUSE_TRACE_FACILITY - configUSE_TRACE_FACILITY 的宏定义。 */

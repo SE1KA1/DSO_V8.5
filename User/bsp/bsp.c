@@ -256,11 +256,9 @@ static void SystemClock_Config(void)
 	HAL_EnableCompensationCell();
 
    /* AXI SRAM��ʱ�����ϵ��Զ�ʹ�ܵģ���D2���SRAM1��SRAM2��SRAM3Ҫ����ʹ�� */	
-#if 0
 	__HAL_RCC_D2SRAM1_CLK_ENABLE();
 	__HAL_RCC_D2SRAM2_CLK_ENABLE();
 	__HAL_RCC_D2SRAM3_CLK_ENABLE();
-#endif
 }
 
 /*
@@ -303,7 +301,7 @@ static void MPU_Config( void )
 	/* ��ֹ MPU */
 	HAL_MPU_Disable();
 
-	/* ����AXI SRAM��MPU����ΪWrite back, Read allocate��Write allocate */
+	/* Region 0: AXI SRAM (0x24000000, 512KB) Write-Back Cacheable */
 	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
 	MPU_InitStruct.BaseAddress      = 0x24000000;
 	MPU_InitStruct.Size             = MPU_REGION_SIZE_512KB;
@@ -369,6 +367,33 @@ static void MPU_Config( void )
 	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
 	HAL_MPU_ConfigRegion(&MPU_InitStruct);
 #endif
+
+	/* Region 4: ETH DMA descriptors + LwIP heap (0x30000000, D2 SRAM1, 64KB)
+	 * Must be Non-Cacheable: DMA controller reads/writes descriptor OWN/status
+	 * bits directly; CPU must always see coherent values.  This also covers
+	 * LWIP_RAM_HEAP_POINTER at 0x30004000 so TX pbuf payloads need no explicit
+	 * cache clean before DMA transmission. */
+	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
+	MPU_InitStruct.BaseAddress      = 0x30000000;
+	MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_64KB;
+	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+	MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
+	MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
+	MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+	MPU_InitStruct.Number           = MPU_REGION_NUMBER4;
+	MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL1;
+	MPU_InitStruct.SubRegionDisable = 0x00;
+	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+	/* Region 5: ETH RxPool + TxConfig (0x38000000, D3 SRAM4, 64KB)
+	 * Non-Cacheable: received frames are DMA-written here; TX config must
+	 * be visible to DMA descriptor setup without cache flushes.  The pbuf
+	 * payload backing RX_POOL at 0x38000000 goes through SCB_InvalidateDCache
+	 * in HAL_ETH_RxLinkCallback, which is a safe no-op on NC memory. */
+	MPU_InitStruct.BaseAddress      = 0x38000000;
+	MPU_InitStruct.Number           = MPU_REGION_NUMBER5;
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
 	/*
 	 * PlotBuf / 波形缓冲在 emWin GUI_ALLOC 中动态分配，基址随构建与堆变化，启动时无法在 MPU_Config 写死「夹心」区。
