@@ -18,6 +18,7 @@
 #include "dso/dso_engine.h"
 #include "dso/dso_wavegen.h"
 #include "dso/dso_eth_upload.h"
+#include "ping.h"
 #include "bsp_vram_layout.h"
 #include "vram_sentinels.h"
 #include "core_cm7.h"
@@ -444,6 +445,8 @@ int main(void)
 
     if (xTaskCreate(DSO_ETH_Upload_Task, "ETH_Up", 2560, NULL, 1, NULL) != pdPASS)
     { printf("[BOOT] FAIL ETH_Up\r\n"); Error_Handler(__FILE__, __LINE__); }
+    if (xTaskCreate(DSO_Ping_Task, "Ping", 1024, NULL, 1, NULL) != pdPASS)
+    { printf("[BOOT] FAIL Ping\r\n"); Error_Handler(__FILE__, __LINE__); }
     /* 启动调度器前恢复系统滴答 */
     HAL_ResumeTick();
     __set_PRIMASK(0);

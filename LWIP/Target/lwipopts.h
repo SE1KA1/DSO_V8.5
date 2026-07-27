@@ -50,7 +50,7 @@
 #define CHECKSUM_CHECK_ICMP6 0
 
 /* Memory optimizations for DSO_V8.5 */
-#define MEM_SIZE                4096
+#define MEM_SIZE                16384
 #define MEMP_NUM_TCP_SEG        5
 #define MEMP_NUM_TCP_PCB        4
 #define MEMP_NUM_UDP_PCB        1
@@ -64,6 +64,8 @@
 #define MEMP_NUM_REASSDATA      2
 #define MEMP_NUM_ARP_QUEUE      6
 #define TCP_MSS                 536
+#define LWIP_RAW                1
+#define MEMP_NUM_RAW_PCB        2
 
 #ifdef __cplusplus
 }
