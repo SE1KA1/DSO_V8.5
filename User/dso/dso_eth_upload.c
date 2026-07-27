@@ -80,12 +80,16 @@ void DSO_ETH_Upload_Task(void *pv)
         r=lwip_accept(s_srv,(struct sockaddr*)&c,&cl);
         if(r<0){static int acnt=0;if(++acnt%25==0)printf("[ETH] acc errno=%d #%d\r\n",errno,acnt);vTaskDelay(pdMS_TO_TICKS(200));continue;}
         s_cli=r;
-        { char d; int t=0;
-          while(lwip_recv(s_cli,&d,1,MSG_PEEK)>=0){
-              vTaskDelay(pdMS_TO_TICKS(1000));
-              if(++t>=2){t=0;DSO_ETH_Upload_SendLine("DSO_V8.5 ETH OK");}
+        printf("[ETH] client connected\r\n");
+        {
+          char buf[256]; int n;
+          while((n=lwip_recv(s_cli,buf,sizeof(buf)-1,0))>0){
+            buf[n]='\0';
+            printf("[ETH] RX %d bytes: %s\r\n",n,buf);
+            lwip_send(s_cli,buf,n,0); /* echo */
           }
         }
+        printf("[ETH] client disconnected\r\n");
         lwip_close(s_cli); s_cli=-1; vTaskDelay(pdMS_TO_TICKS(100));
     }
 idle: for(;;) vTaskDelay(pdMS_TO_TICKS(1000));
