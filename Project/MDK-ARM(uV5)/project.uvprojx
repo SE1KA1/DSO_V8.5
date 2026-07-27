@@ -1090,6 +1090,11 @@
               <FilePath>..\..\LWIP\App\lwip.c</FilePath>
             </File>
             <File>
+              <FileName>ping.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\LWIP\App\ping.c</FilePath>
+            </File>
+            <File>
               <FileName>ethernetif.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\LWIP\Target\ethernetif.c</FilePath>

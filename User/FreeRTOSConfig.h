@@ -74,7 +74,7 @@
 /* 宏定义: configMINIMAL_STACK_SIZE - configMINIMAL_STACK_SIZE 的宏定义。 */
 #define configMINIMAL_STACK_SIZE				( ( unsigned short ) 130 )
 /* emWin/DSO 任务栈自 heap_4 分配；增大栈深后需同步加大堆，避免 xTaskCreate/pvPortMalloc 失败 */
-#define configTOTAL_HEAP_SIZE					( ( size_t ) ( 140 * 1024 ) )
+#define configTOTAL_HEAP_SIZE					( ( size_t ) ( 148 * 1024 ) )
 /* 宏定义: configMAX_TASK_NAME_LEN - configMAX_TASK_NAME_LEN 的宏定义。 */
 #define configMAX_TASK_NAME_LEN					( 10 )
 /* 宏定义: configUSE_TRACE_FACILITY - configUSE_TRACE_FACILITY 的宏定义。 */
