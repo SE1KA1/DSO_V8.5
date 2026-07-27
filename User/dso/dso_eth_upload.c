@@ -64,13 +64,15 @@ void DSO_ETH_Upload_Task(void *pv)
         }
         lwip_close(s_srv);
     }
-    goto idle;
+    /* TCP server on port 5005 */
+    s_srv = lwip_socket(AF_INET, SOCK_STREAM, 0);
+    if (s_srv < 0) { printf("[ETH] TCP socket fail errno=%d\r\n", errno); goto idle; }
     memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_addr.s_addr=INADDR_ANY;
     a.sin_port=lwip_htons(ETH_UPLOAD_PORT);
-    if(lwip_bind(s_srv,(struct sockaddr*)&a,sizeof(a))<0){printf("[ETH] bind fail\r\n");lwip_close(s_srv);s_srv=-1;goto idle;}
+    if(lwip_bind(s_srv,(struct sockaddr*)&a,sizeof(a))<0){printf("[ETH] bind fail errno=%d\r\n",errno);lwip_close(s_srv);s_srv=-1;goto idle;}
     printf("[ETH] bind :%d OK\r\n",ETH_UPLOAD_PORT);
-    if(lwip_listen(s_srv,1)<0){printf("[ETH] listen fail\r\n");lwip_close(s_srv);s_srv=-1;goto idle;}
+    if(lwip_listen(s_srv,1)<0){printf("[ETH] listen fail errno=%d\r\n",errno);lwip_close(s_srv);s_srv=-1;goto idle;}
     printf("[ETH] listening :%d\r\n",ETH_UPLOAD_PORT);
 
     for(;;){
