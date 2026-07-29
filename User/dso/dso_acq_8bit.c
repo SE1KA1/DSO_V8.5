@@ -972,7 +972,7 @@ static void configure_tri_interleaved_backend(void)
 
     DSO_AcqCommon_ConfigAdcChannel(&s_acq8.hadc1, ADC_CHANNEL_3);
     DSO_AcqCommon_ConfigAdcChannel(&s_acq8.hadc2, ADC_CHANNEL_3);
-    DSO_AcqCommon_ConfigAdcChannel(&s_acq8.hadc3, ADC_CHANNEL_1);
+    DSO_AcqCommon_ConfigAdcChannel(&s_acq8.hadc3, ADC_CHANNEL_12);
 
     multi.Mode = ADC_MODE_INDEPENDENT;
     if (HAL_ADCEx_MultiModeConfigChannel(&s_acq8.hadc1, &multi) != HAL_OK) {

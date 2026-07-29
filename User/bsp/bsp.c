@@ -257,8 +257,8 @@ static void SystemClock_Config(void)
 
    /* AXI SRAM��ʱ�����ϵ��Զ�ʹ�ܵģ���D2���SRAM1��SRAM2��SRAM3Ҫ����ʹ�� */	
 	__HAL_RCC_D2SRAM1_CLK_ENABLE();
-	__HAL_RCC_D2SRAM2_CLK_ENABLE();
-	__HAL_RCC_D2SRAM3_CLK_ENABLE();
+	__HAL_RCC_D2SRAM2_CLK_DISABLE();
+	__HAL_RCC_D2SRAM3_CLK_DISABLE();
 }
 
 /*
