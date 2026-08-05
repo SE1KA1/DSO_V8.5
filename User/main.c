@@ -369,6 +369,11 @@ int main(void)
     LCD_RGB_Init();
     APP_INFO_PRINTF("[BOOT] LTDC FB=0x%08lX\r\n", (unsigned long)LCD_RGB_FB_ADDR);
 
+    /* Release cloud-bridge FPGA reset — SDRAM/LCD are now configured */
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOH, GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8, GPIO_PIN_SET);
+    APP_INFO_PRINTF("[BOOT] FPGA reset released\r\n");
+
     /* 试验：PG10 拉高 */
     {
         GPIO_InitTypeDef gpio_pg10 = {0};
