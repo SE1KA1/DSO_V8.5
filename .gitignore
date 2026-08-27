@@ -35,3 +35,10 @@ JLink*
 
 # CMSIS Pack / DFM
 *.pack
+# Python / venv / tool artifacts
+pc_switch_panel/.venv/
+**/__pycache__/
+.pytest_cache/
+.idea/
+dsosim/.venv/
+*.pyc

@@ -1,5 +1,7 @@
 #include "dso_eth_upload.h"
+#include "dso_switch_cmd.h"
 #include "lwip.h"
+#include "ethernetif.h"
 #include "lwip/sockets.h"
 #include "lwip/netif.h"
 #include "lwip/errno.h"
@@ -13,6 +15,10 @@
 
 static int s_cli=-1, s_srv=-1;
 static SemaphoreHandle_t s_mtx;
+
+/* 命令行缓冲：跨 lwip_recv 分片积累，遇 \n 触发一行分发 */
+static char s_cmd_line[512];
+static int  s_cmd_line_len;
 
 void DSO_ETH_Upload_Init(void){ s_mtx=xSemaphoreCreateMutex(); }
 
@@ -28,6 +34,7 @@ void DSO_ETH_Upload_SendLine(const char *t)
 void DSO_ETH_Upload_Task(void *pv)
 {
     (void)pv;
+    printf("[ETH] task enter\r\n");
     /* Flash backlight to confirm task entry */
     *(volatile uint32_t*)0x40020418 = (1U<<14); /* PB14 ON */
     for(volatile uint32_t d=0; d<5000000U; d++){}
@@ -45,7 +52,11 @@ void DSO_ETH_Upload_Task(void *pv)
                (void*)nf, (int)(nf?netif_is_up(nf):0),
                (unsigned long)(nf?ip4_addr_get_u32(netif_ip4_addr(nf)):0));
     }
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    /* 链路诊断：立即查 PHY 应答与 REF_CLK；3s 后（自动协商期）再查 link 状态 */
+    ETH_DebugDumpStatus();
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    ETH_DebugDumpStatus();
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
     /* UDP test: send to PC */
     {
@@ -81,12 +92,27 @@ void DSO_ETH_Upload_Task(void *pv)
         if(r<0){static int acnt=0;if(++acnt%25==0)printf("[ETH] acc errno=%d #%d\r\n",errno,acnt);vTaskDelay(pdMS_TO_TICKS(200));continue;}
         s_cli=r;
         printf("[ETH] client connected\r\n");
+        s_cmd_line_len = 0;
         {
           char buf[256]; int n;
           while((n=lwip_recv(s_cli,buf,sizeof(buf)-1,0))>0){
-            buf[n]='\0';
-            printf("[ETH] RX %d bytes: %s\r\n",n,buf);
-            lwip_send(s_cli,buf,n,0); /* echo */
+            int i;
+            for(i=0;i<n;i++){
+              char c=buf[i];
+              if(c=='\n'){
+                char reply[256];
+                s_cmd_line[s_cmd_line_len]='\0';
+                if(DSO_Switch_Cmd_HandleLine(s_cmd_line,reply,sizeof(reply))){
+                  printf("[SWC] %s -> %s\r\n",s_cmd_line,reply);
+                  DSO_ETH_Upload_SendLine(reply); /* 命令应答走同一 socket */
+                }else{
+                  DSO_ETH_Upload_SendLine(s_cmd_line); /* 非开关命令：保留原 echo */
+                }
+                s_cmd_line_len=0;
+              }else if(c!='\r'){
+                if(s_cmd_line_len < (int)sizeof(s_cmd_line)-1) s_cmd_line[s_cmd_line_len++]=c;
+              }
+            }
           }
         }
         printf("[ETH] client disconnected\r\n");

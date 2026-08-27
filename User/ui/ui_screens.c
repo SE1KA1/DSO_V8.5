@@ -20,6 +20,7 @@
 #include "dso/dso_config.h"
 #include "dso/dso_10bit_lane_cal.h"
 #include "ui_system_setup.h"
+#include "ui_switch_panel.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -214,6 +215,8 @@ static void screen_main_menu(uint32_t tick_ms)
     draw_menu_card(x, y, w, card_h, sel == 3, "Auto measure", "All params CH1 / CH2");
     y += card_h + gap;
     draw_menu_card(x, y, w, card_h, sel == 4, "System", "ADC 8-bit/10-bit  factory  EC nav");
+    y += card_h + gap;
+    draw_menu_card(x, y, w, card_h, sel == 5, "Switch panel", "Cloud LED + 14-bit DIP  EC1 nav");
 }
 
 /*
@@ -852,6 +855,15 @@ static void screen_system(uint32_t tick_ms)
     }
 }
 
+/* 开关面板页：LED + 拨码开关 */
+static void screen_switch(uint32_t tick_ms)
+{
+    fill_bg();
+    draw_header_bar("SWITCH PANEL", "EC nav");
+    draw_footer_bar("EC1: select  EC1 click: toggle  |  BACK: scope");
+    UI_Switch_Draw(tick_ms);
+}
+
 /*
 *********************************************************************************************************
 *   函 数 名: UI_Screen_Draw
@@ -885,6 +897,9 @@ void UI_Screen_Draw(UI_ScreenId_t id, uint32_t tick_ms)
         break;
     case UI_SCR_SYSTEM:
         screen_system(tick_ms);
+        break;
+    case UI_SCR_SWITCH:
+        screen_switch(tick_ms);
         break;
     default:
         fill_bg();

@@ -112,7 +112,7 @@ typedef struct
 } RxBuff_t;
 
 /* Memory Pool Declaration */
-#define ETH_RX_BUFFER_CNT             4U
+#define ETH_RX_BUFFER_CNT             12U   /* 与参考工程一致，RX 余量更足 */
 LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX PBUF pool");
 
 /* Variable Definitions */
@@ -360,6 +360,7 @@ static void ETH_DebugCaptureTxState(void);
 static int32_t ETH_DebugRunCableDiagnostic(void);
 static void ETH_DebugHandleCommand(void);
 static void ETH_DebugSampleRefClk(uint32_t samples);
+static void ETH_DebugSampleRefClk(uint32_t samples);
 static void ETH_DebugRunLoopbackTest(void);
 static int32_t ETH_PHY_GetLinkStateCompat(void);
 
@@ -570,6 +571,36 @@ static void ETH_DebugDecodeLan8720(void)
   {
     eth_dbg.lan8720_full_duplex = 1U;
   }
+}
+
+/* 链路诊断：打印 PHY 应答/MDIO 扫描/REF_CLK 采样结果（由 ETH 任务在 LwIP init 后调用） */
+void ETH_DebugDumpStatus(void)
+{
+  uint32_t bsr;
+
+  ETH_DebugScanPhy();
+  ETH_DebugReadPhyRegs();
+  ETH_DebugDecodeLan8720();
+  ETH_DebugSampleRefClk(2000u);   /* 采样 PA1(ETH_REF_CLK)，2000 次快速读 */
+
+  bsr = eth_dbg.phy_bsr & 0xFFFFu;
+  printf("[PHY] hal_init=%ld phy_init=%ld devaddr=%lu scan_addr=0x%lX "
+         "id1=0x%04lX id2=0x%04lX\r\n",
+         (long)eth_dbg.hal_init_status, (long)eth_dbg.phy_init_status,
+         (unsigned long)eth_dbg.phy_dev_addr,
+         (unsigned long)eth_dbg.scan_found_addr,
+         (unsigned long)eth_dbg.phy_id1, (unsigned long)eth_dbg.phy_id2);
+  printf("[PHY] link=%lu autoneg_cplt=%lu bcr=0x%04lX bsr=0x%04lX "
+         "mdix_auto=%lu\r\n",
+         (unsigned long)eth_dbg.lan8720_link_bit,
+         (unsigned long)eth_dbg.lan8720_autoneg_complete,
+         (unsigned long)eth_dbg.phy_bcr, (unsigned long)bsr,
+         (unsigned long)eth_dbg.lan8720_auto_mdix);
+  printf("[REFCLK] samples=%lu flips=%lu high=%lu low=%lu\r\n",
+         (unsigned long)eth_dbg.refclk_sample_count,
+         (unsigned long)eth_dbg.refclk_flip_count,
+         (unsigned long)eth_dbg.refclk_high_count,
+         (unsigned long)eth_dbg.refclk_low_count);
 }
 
 static int32_t ETH_PHY_RestoreNormalMode(void)
@@ -1913,21 +1944,21 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
     GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_5;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
     GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_7;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
     GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_13|GPIO_PIN_14;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
     HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
@@ -1938,7 +1969,7 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
      */
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
 
     GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_5;

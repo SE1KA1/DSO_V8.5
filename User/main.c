@@ -18,6 +18,8 @@
 #include "dso/dso_engine.h"
 #include "dso/dso_wavegen.h"
 #include "dso/dso_eth_upload.h"
+#include "dso/dso_switch_cmd.h"
+#include "dso/fmc16/fmc16_integration.h"
 #include "ping.h"
 #include "bsp_vram_layout.h"
 #include "vram_sentinels.h"
@@ -72,6 +74,9 @@ TaskHandle_t g_dso_engine_task = NULL;
 /* DMA2D 初始化已移植到 dma2d_wave.c，此处仅保留 Phase1 可选自检（GUI 前） */
 #define DMA2D_PHASE1_TEST       0   /* 1=运行测试 0=跳过 */
 #define DMA2D_PHASE2_TEST       0   /* 已废弃：DMA2D 初始化在 dma2d_wave，不再显示红块 */
+
+/* FMC16 云桥 FPGA 通信：1=启用。需 XO2 已烧录 FMC16_PERSONALITY 位流 + BFPS_nOE_JP=1-2 */
+#define FMC16_ENABLE            1
 
 #if (DMA2D_PHASE1_TEST == 1)
 /**
@@ -350,6 +355,14 @@ int main(void)
     bsp_InitExtSDRAM();
     SDRAM_QuickCheck();
     APP_INFO_PRINTF("[BOOT] SDRAM OK\r\n");
+    { /* FMC bus integrity test — verify cloud bridge not corrupting SDRAM */
+        volatile uint16_t *p = (volatile uint16_t *)0xC0000000U;
+        uint16_t r;
+        *p = 0x55AA; r = *p;
+        printf("[BOOT] SDRAM test 0x55AA: read=0x%04X %s\r\n", r, r==0x55AA?"PASS":"FAIL");
+        *p = 0xAA55; r = *p;
+        printf("[BOOT] SDRAM test 0xAA55: read=0x%04X %s\r\n", r, r==0xAA55?"PASS":"FAIL");
+    }
     VRAM_Sentinels_Init();
 
 #if (SDRAM_GUI_HEAP_TEST_AT_BOOT != 0)
@@ -364,14 +377,31 @@ int main(void)
 #endif
 
     /* 初始化帧缓冲区，防止花屏 */
+    bsp_Uart1SendStringPolled("[BOOT] pre-Framebuffer\r\n");
     Framebuffer_Init();
+    bsp_Uart1SendStringPolled("[BOOT] post-Framebuffer\r\n");
 
+    bsp_Uart1SendStringPolled("[BOOT] pre-LCD_RGB_Init\r\n");
     LCD_RGB_Init();
+    bsp_Uart1SendStringPolled("[BOOT] post-LCD_RGB_Init\r\n");
     APP_INFO_PRINTF("[BOOT] LTDC FB=0x%08lX\r\n", (unsigned long)LCD_RGB_FB_ADDR);
+    { /* GUI heap region check (emWin 2MB @ 0xC0400000) */
+        volatile uint16_t *g = (volatile uint16_t *)0xC0400000U;
+        uint16_t ov = *g;
+        *g = 0xAA55; if (*g != 0xAA55)
+            bsp_Uart1SendStringPolled("[GUIHEAP] FAIL @c0400000\r\n");
+        else bsp_Uart1SendStringPolled("[GUIHEAP] OK @c0400000\r\n");
+        *g = ov; /* restore */
+    }
 
-    /* Release cloud-bridge FPGA reset — SDRAM/LCD are now configured */
+    /* Release cloud-bridge FPGA reset — SDRAM/LCD are now configured.
+     * PH8 (Cloud_EN) stays HIGH to keep SN74LVC257 bus isolated from the
+     * unconfigured FPGA, preventing DMA2D/LTDC SDRAM corruption. */
     HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOH, GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOH, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOH, GPIO_PIN_8, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOH, GPIO_PIN_7, GPIO_PIN_RESET);
+    printf("[PH8] IDR=%d\r\n", (int)((GPIOH->IDR >> 8) & 1));
     APP_INFO_PRINTF("[BOOT] FPGA reset released\r\n");
 
     /* 试验：PG10 拉高 */
@@ -393,14 +423,57 @@ int main(void)
         LTDC->SRCR = LTDC_SRCR_IMR;
     }
 
+    bsp_Uart1SendStringPolled("[BOOT] pre-Backlight\r\n");
     LCD_RGB_BacklightOn();
+    bsp_Uart1SendStringPolled("[BOOT] post-Backlight\r\n");
 
     /* DMA2D 时钟使能：须在 MainTask 首次 GUI 绘制前完成（原 Phase2 测试在此处执行）
      * 否则 GUI_FillRect、DrawGridFull 等使用 DMA2D 时时钟未开，导致背景显示不全 */
+    bsp_Uart1SendStringPolled("[BOOT] pre-DMA2D\r\n");
     __HAL_RCC_DMA2D_CLK_ENABLE();
     DMA2D_Wait_Init();
     /* emWin 启动前再清一次 UNALIGN_TRP（若此前固件未烧录或某路径曾改写 CCR） */
     Bsp_DisableUnalignedFaultTrap();
+    bsp_Uart1SendStringPolled("[BOOT] post-DMA2D\r\n");
+    { /* DMA2D→SDRAM master test: DMA2D bypasses CPU cache, different bus path */
+        volatile uint16_t *dst = (volatile uint16_t *)0xC0600000U;
+        uint32_t i, err = 0;
+        DMA2D->CR = 0x00000000UL;
+        DMA2D->CR = 0x00030000UL;                /* R2M */
+        DMA2D->OCOLR = 0xF800U;
+        DMA2D->OMAR = (uint32_t)dst;
+        DMA2D->OOR = 0U;
+        DMA2D->OPFCCR = 0x02U;                   /* RGB565 */
+        DMA2D->NLR = (64UL << 16) | 64UL;
+        DMA2D->CR |= DMA2D_CR_START;
+        for (i = 0U; i < 1000000UL; i++) {
+            if ((DMA2D->CR & DMA2D_CR_START) == 0U) break;
+        }
+        if (DMA2D->CR & DMA2D_CR_START) {
+            bsp_Uart1SendStringPolled("[DMA2DSDRAM] TIMEOUT\r\n");
+        } else {
+            for (i = 0U; i < 4096U; i++) if (dst[i] != 0xF800U) err++;
+            if (err) printf("[DMA2DSDRAM] FAIL err=%lu\r\n", (unsigned long)err);
+            else bsp_Uart1SendStringPolled("[DMA2DSDRAM] OK\r\n");
+        }
+    }
+    { /* CPU bulk SDRAM write test — within known-valid 4MB region */
+        volatile uint16_t *p = (volatile uint16_t *)0xC0100000U;
+        uint32_t i, err = 0;
+        for (i = 0U; i < 8192U; i++) p[i] = 0xA55AU;
+        SCB_CleanDCache_by_Addr((uint32_t *)p, 8192U * 2U);
+        for (i = 0U; i < 8192U; i++) if (p[i] != 0xA55AU) err++;
+        if (err) printf("[CPUBULK] FAIL err=%lu\r\n", (unsigned long)err);
+        else bsp_Uart1SendStringPolled("[CPUBULK] OK\r\n");
+    }
+    { /* CPU small SDRAM test — 8 words at base region */
+        volatile uint16_t *q = (volatile uint16_t *)0xC0001000U;
+        uint32_t i, err = 0;
+        for (i = 0U; i < 8U; i++) q[i] = 0x1234U;
+        SCB_CleanDCache_by_Addr((uint32_t *)q, 8U * 2U);
+        for (i = 0U; i < 8U; i++) if (q[i] != 0x1234U) err++;
+        printf("[CPUSMALL] err=%lu\r\n", (unsigned long)err);
+    }
 
     /*
      * 在创建任务之前初始化波形队列（可先于调度器调用），避免 emWin/GUI 先占满 FreeRTOS 堆
@@ -411,6 +484,24 @@ int main(void)
     RollHistory_Init();
 #endif
     DSO_ETH_Upload_Init();
+
+#if FMC16_ENABLE
+    /* FMC16 云桥 FPGA 通信初始化（最小通信测试入口）：
+     *   1. fmc16_bus_init()     — FMC Bank1 16-bit 异步 SRAM + GPIO
+     *   2. fmc16_crc_selftest() — CRC golden vector 验证
+     *   3. 链路层初始化，等待 XO2 LINK_HELLO
+     */
+    if (fmc16_system_init()) {
+        printf("[BOOT] FMC16 init OK, waiting LINK_HELLO...\r\n");
+    } else {
+        printf("[BOOT] FMC16 CRC selftest FAILED\r\n");
+    }
+#endif
+
+    /* 开关面板初始化必须放在 FMC16 init 之后：
+     * bsp_fmc_io 会把 PH8(G#/Cloud_EN) 重配为 AF12_FMC(上拉)，覆盖 PH8=LOW，
+     * 导致 SN74LVC257 输出禁用、开关信号悬空回 3.3V。 */
+    DSO_Switch_Cmd_Init();
 
 #if (LCD_DIAGNOSTIC_MODE == 1)
     /* 硬件诊断测试：绕过 emWin 直接测试 LTDC */
@@ -448,10 +539,17 @@ int main(void)
     RtosCpuStats_TaskCreate();
 #endif
 
-    if (xTaskCreate(DSO_ETH_Upload_Task, "ETH_Up", 2560, NULL, 1, NULL) != pdPASS)
+    if (xTaskCreate(DSO_ETH_Upload_Task, "ETH_Up", 2560, NULL, 2, NULL) != pdPASS)
     { printf("[BOOT] FAIL ETH_Up\r\n"); Error_Handler(__FILE__, __LINE__); }
     if (xTaskCreate(DSO_Ping_Task, "Ping", 1024, NULL, 1, NULL) != pdPASS)
     { printf("[BOOT] FAIL Ping\r\n"); Error_Handler(__FILE__, __LINE__); }
+
+#if FMC16_ENABLE
+    /* FMC16 云桥服务任务：1ms 轮询 FMC 总线、解析协议包、维护链路 */
+    if (xTaskCreate(FMC16_Service_Task, "FMC16", 2048, NULL, 1, NULL) != pdPASS)
+    { printf("[BOOT] FAIL FMC16\r\n"); Error_Handler(__FILE__, __LINE__); }
+#endif
+
     /* 启动调度器前恢复系统滴答 */
     HAL_ResumeTick();
     __set_PRIMASK(0);
@@ -464,6 +562,33 @@ int main(void)
     vTaskStartScheduler();
 #endif
 
+    /* 1. 定义 SDRAM 显存的基地址（通常 FMC SDRAM Bank 1 起始地址） */
+#define SDRAM_BASE_ADDR   ((uint32_t)0xC0000000)
+
+/* 2. 定义测试用的常量颜色值（比如 16位 白色 0xFFFF，或者 32位 RGBA 0xFFFFFFFF） */
+#define TEST_COLOR_16BIT  0xFFFF   /* 16-bit RGB565 白色 */
+#define TEST_COLOR_32BIT  0xFFFFFFFF /* 32-bit ARGB 白色 */
+
+/* 3. 定义存储读取结果的变量 */
+uint16_t read_back_16 = 0;
+uint32_t read_back_32 = 0;
+
+/* 4. 写入测试（将值写入 SDRAM 的起始地址） */
+/* 如果您使用的是 16-bit 数据总线（如 W9825G6），需强制使用 16-bit 指针 */
+*(volatile uint16_t *)(SDRAM_BASE_ADDR) = TEST_COLOR_16BIT;
+
+/* 如果您的 SDRAM 是 32-bit 数据总线，或者代码中配置为 32-bit 访问，则用下面这句： */
+// *(volatile uint32_t *)(SDRAM_BASE_ADDR) = TEST_COLOR_32BIT;
+
+/* 5. 读回对比（从同一地址读出） */
+read_back_16 = *(volatile uint16_t *)(SDRAM_BASE_ADDR);
+
+/* 6. 判断对比结果（通过串口打印或断点查看） */
+if (read_back_16 == TEST_COLOR_16BIT) {
+    printf("SDRAM 读写测试 PASSED! 写入 0x%X, 读到 0x%X\r\n", TEST_COLOR_16BIT, read_back_16);
+} else {
+    printf("SDRAM 读写测试 FAILED! 写入 0x%X, 读到 0x%X\r\n", TEST_COLOR_16BIT, read_back_16);
+}
     while (1)
     {
     }

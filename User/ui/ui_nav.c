@@ -21,6 +21,7 @@
 #include "ui_trigger_ui.h"
 #include "UI_WaveformCtrl.h"
 #include "ui_system_setup.h"
+#include "ui_switch_panel.h"
 
 static volatile UI_ScreenId_t    s_screen = UI_SCR_SCOPE;
 static volatile uint8_t          s_redraw_req;
@@ -67,6 +68,8 @@ static TickType_t s_ec1_last_ms;
 static TickType_t s_ec2_last_ms;
 static uint8_t s_io_inited;
 static uint8_t s_enc_arm;
+/* EC 诊断插桩：上次打印的 gpb，变化时输出原始值+解码结果（排查 EC2 无响应，定位后移除） */
+static int s_dbg_last_gpb = -1;
 static int16_t s_ec1_pulse_accum;
 static int16_t s_ec2_pulse_accum;
 /* 上次有效单步方向 ±1，用于快转时 A/B 同时跳变（对角）时补 ±2 步 */
@@ -135,6 +138,9 @@ static void nav_set_screen_internal(UI_ScreenId_t id)
     if (id == UI_SCR_SYSTEM) {
         UI_System_OnScreenShown();
     }
+    if (id == UI_SCR_SWITCH) {
+        UI_Switch_OnScreenShown();
+    }
 }
 
 /*
@@ -168,6 +174,10 @@ static void nav_menu_enter_from_focus(void)
         s_scope_ui_mode = UI_SCOPE_UI_WAVE;
         nav_set_screen_internal(UI_SCR_SYSTEM);
         break;
+    case 5:
+        s_scope_ui_mode = UI_SCOPE_UI_WAVE;
+        nav_set_screen_internal(UI_SCR_SWITCH);
+        break;
     default:
         break;
     }
@@ -190,6 +200,10 @@ static void nav_apply_ok(void)
     }
     if (s_screen == UI_SCR_MAIN_MENU) {
         nav_menu_enter_from_focus();
+        return;
+    }
+    if (s_screen == UI_SCR_SWITCH) {
+        UI_Switch_Ec1Click();
         return;
     }
 }
@@ -268,8 +282,8 @@ int UI_Nav_GetMenuFocus(void)
     if (s_menu_focus < 0) {
         s_menu_focus = 0;
     }
-    if (s_menu_focus > 4) {
-        s_menu_focus = 4;
+    if (s_menu_focus > 5) {
+        s_menu_focus = 5;
     }
     return (int)s_menu_focus;
 }
@@ -451,7 +465,7 @@ void UI_Nav_Poll(void)
             s_ec1_pulse_accum += (int16_t)step1;
             while (s_ec1_pulse_accum >= (int16_t)UI_ENC_PULSES_PER_DETENT) {
                 s_ec1_pulse_accum -= (int16_t)UI_ENC_PULSES_PER_DETENT;
-                if (s_menu_focus < 4) {
+                if (s_menu_focus < 5) {
                     s_menu_focus++;
                     s_redraw_req = 1u;
                 }
@@ -498,6 +512,18 @@ void UI_Nav_Poll(void)
             while (s_ec1_pulse_accum <= -(int16_t)UI_ENC_PULSES_PER_DETENT) {
                 s_ec1_pulse_accum += (int16_t)UI_ENC_PULSES_PER_DETENT;
                 UI_System_Ec1Detent(-1);
+            }
+        }
+    } else if (s_screen == UI_SCR_SWITCH) {
+        if (s_enc_arm != 0u && step1 != 0) {
+            s_ec1_pulse_accum += (int16_t)step1;
+            while (s_ec1_pulse_accum >= (int16_t)UI_ENC_PULSES_PER_DETENT) {
+                s_ec1_pulse_accum -= (int16_t)UI_ENC_PULSES_PER_DETENT;
+                UI_Switch_Ec1Detent(1);
+            }
+            while (s_ec1_pulse_accum <= -(int16_t)UI_ENC_PULSES_PER_DETENT) {
+                s_ec1_pulse_accum += (int16_t)UI_ENC_PULSES_PER_DETENT;
+                UI_Switch_Ec1Detent(-1);
             }
         }
     } else if (s_screen == UI_SCR_SCOPE && s_scope_ui_mode == UI_SCOPE_UI_WAVE) {
@@ -703,6 +729,16 @@ void UI_Nav_Poll(void)
         }
         s_ec2_btn_prev = ec2_down;
     }
+
+    /* ── EC 诊断插桩：gpb 变化时打印原始值+解码结果（排查 EC2 无响应，定位后移除） ── */
+    if ((int)gpb != s_dbg_last_gpb) {
+        s_dbg_last_gpb = (int)gpb;
+        printf("[GPB] raw=0x%02X | EC1:A%u B%u R%u | EC2:A%u B%u R%u | ec1d=%u ec2d=%u | step1=%d step2=%d\n",
+               gpb,
+               (gpb >> 2u) & 1u, (gpb >> 1u) & 1u, (gpb >> 0u) & 1u,
+               (gpb >> 5u) & 1u, (gpb >> 4u) & 1u, (gpb >> 3u) & 1u,
+               (unsigned)ec1_down, (unsigned)ec2_down, (int)step1, (int)step2);
+    }
 }
 
 /*
@@ -726,7 +762,7 @@ void UI_Nav_OnKey(UI_NavKey_t key)
         }
         break;
     case UI_NAV_KEY_DOWN:
-        if (s_menu_focus < 4 &&
+        if (s_menu_focus < 5 &&
             (s_screen == UI_SCR_MAIN_MENU ||
              (s_screen == UI_SCR_SCOPE && s_scope_ui_mode == UI_SCOPE_UI_MENU))) {
             s_menu_focus++;

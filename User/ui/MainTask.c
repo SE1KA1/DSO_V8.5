@@ -1282,7 +1282,7 @@ static void DrawScopeSideMenu(void)
     /* 顶行 MENU/WAVE 加高后，卡片区高度按底边距 6px 重算 */
     const int title_h = 30;
     const int top = py + title_h;
-    const int card_h = (ph - title_h - 6 - 4 * gap) / 5;
+    const int card_h = (ph - title_h - 6 - 5 * gap) / 6;
     int i;
     int y = top;
     int sel = UI_Nav_GetMenuFocus();
@@ -1290,12 +1290,13 @@ static void DrawScopeSideMenu(void)
     static const struct {
         const char *t1;
         const char *t2;
-    } rows[5] = {
+    } rows[6] = {
         { "Scope",    "Wave" },
         { "Channel",  "V/div  offset" },
         { "Trigger",  "Trig" },
         { "Measure",  "Auto" },
-        { "System",   "Setup" }
+        { "System",   "Setup" },
+        { "Panel",   "Switch/LED" }
     };
 
     GUI_SetTextMode(GUI_TM_TRANS);
@@ -1313,7 +1314,7 @@ static void DrawScopeSideMenu(void)
         scope_menu_str_cx(title, px, px + pw - 1, py + (title_h - th) / 2);
     }
 
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < 6; i++) {
         int x0 = px + 3;
         int x1 = px + pw - 4;
         int ya = y;
@@ -2218,7 +2219,9 @@ void MainTask(void)
     APP_INFO_PRINTF("[APP] MainTask started\r\n");
 
     __HAL_RCC_CRC_CLK_ENABLE();
+    bsp_Uart1SendStringPolled("[UI] pre-GUI\r\n");
     GUI_Init();
+    bsp_Uart1SendStringPolled("[UI] post-GUI\r\n");
     APP_INFO_PRINTF("[APP] GUI_Init OK\r\n");
     GUI_SetTextMode(GUI_TM_TRANS);
 

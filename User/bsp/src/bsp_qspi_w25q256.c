@@ -21,6 +21,7 @@
 */
 
 #include "bsp.h"
+#include "bsp_qspi_w25q256.h"
 
 
 

@@ -1,6 +1,6 @@
 /**
  * @file bsp.c
- * @brief 板级�?持包入口：MPU、I/D Cache�?400MHz 时钟、HAL_Init、基�?外�?�初始化�?
+ * @brief 板级�?持包入口：MPU、I/D Cache�?400MHz 时钟、HAL_Init、基�?外�?�初始化�?
  */
 
 /*
@@ -32,19 +32,19 @@
 static void SystemClock_Config(void);
 /*
 *********************************************************************************************************
-*   �? �? �?: CPU_CACHE_Enable
-*   功能说明: CPU_CACHE_Enable 的函数接口或内部实现�?
-*   �?    �?: 参�?�函数声明�??
-*   �? �? �?: 参�?�函数声明�??
+*   �? �? �?: CPU_CACHE_Enable
+*   功能说明: CPU_CACHE_Enable 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
 *********************************************************************************************************
 */
 static void CPU_CACHE_Enable(void);
 /*
 *********************************************************************************************************
-*   �? �? �?: MPU_Config
-*   功能说明: MPU_Config 的函数接口或内部实现�?
-*   �?    �?: 参�?�函数声明�??
-*   �? �? �?: 参�?�函数声明�??
+*   �? �? �?: MPU_Config
+*   功能说明: MPU_Config 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
 *********************************************************************************************************
 */
 static void MPU_Config(void);
@@ -58,19 +58,19 @@ static void MPU_Config(void);
 static void SystemClock_Config(void);
 /*
 *********************************************************************************************************
-*   �? �? �?: CPU_CACHE_Enable
-*   功能说明: CPU_CACHE_Enable 的函数接口或内部实现�?
-*   �?    �?: 参�?�函数声明�??
-*   �? �? �?: 参�?�函数声明�??
+*   �? �? �?: CPU_CACHE_Enable
+*   功能说明: CPU_CACHE_Enable 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
 *********************************************************************************************************
 */
 static void CPU_CACHE_Enable(void);
 /*
 *********************************************************************************************************
-*   �? �? �?: MPU_Config
-*   功能说明: MPU_Config 的函数接口或内部实现�?
-*   �?    �?: 参�?�函数声明�??
-*   �? �? �?: 参�?�函数声明�??
+*   �? �? �?: MPU_Config
+*   功能说明: MPU_Config 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
 *********************************************************************************************************
 */
 static void MPU_Config(void);
@@ -85,13 +85,31 @@ static void MPU_Config(void);
 */
 void System_Init(void)
 {
-	/* Isolate cloud-bridge FPGA BEFORE any FMC access */
-	__HAL_RCC_GPIOE_CLK_ENABLE();
-	__HAL_RCC_GPIOH_CLK_ENABLE();
-	__HAL_RCC_GPIOD_CLK_ENABLE();
-	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(GPIOH, GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8, GPIO_PIN_RESET);
-	{ GPIO_InitTypeDef g={0}; g.Pin=GPIO_PIN_6; g.Mode=GPIO_MODE_INPUT; g.Pull=GPIO_PULLUP; HAL_GPIO_Init(GPIOD, &g); g.Pull=GPIO_NOPULL; g.Mode=GPIO_MODE_OUTPUT_PP; g.Speed=GPIO_SPEED_FREQ_LOW; g.Pin=GPIO_PIN_3; HAL_GPIO_Init(GPIOE, &g); g.Pin=GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8; HAL_GPIO_Init(GPIOH, &g); }
+		/* Isolate cloud-bridge FPGA BEFORE any FMC access.
+		 * J1B: FMC_DB[15:0] data bus on BTB corrupts FMC — SN74LVC257 isolated
+		 *      via PH8=HIGH (Cloud_EN). PD6 (FMC_NWAIT) is NOT touched: it
+		 *      multiplexes LCD_B2 and must stay free for LCD_RGB_Init.
+		 * PC6=nCONFIG held LOW (FPGA in reset); PE3/PH6/PH7 config control LOW;
+		 * PC10-12 (RISC-V JTAG) muted as inputs. */
+		__HAL_RCC_GPIOE_CLK_ENABLE();
+		__HAL_RCC_GPIOH_CLK_ENABLE();
+		__HAL_RCC_GPIOC_CLK_ENABLE();
+		HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_RESET);  /* PC6=nCONFIG LOW=FPGA reset */
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(GPIOH, GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(GPIOH, GPIO_PIN_8, GPIO_PIN_SET); /* PH8=HIGH: Cloud_EN disable bus */
+		{ GPIO_InitTypeDef g={0};
+		  g.Pull=GPIO_NOPULL; g.Mode=GPIO_MODE_OUTPUT_PP; g.Speed=GPIO_SPEED_FREQ_LOW;
+		  g.Pin=GPIO_PIN_6; HAL_GPIO_Init(GPIOC, &g);  /* PC6 output */
+		  g.Pin=GPIO_PIN_3; HAL_GPIO_Init(GPIOE, &g);
+		  g.Pin=GPIO_PIN_6|GPIO_PIN_7; HAL_GPIO_Init(GPIOH, &g);
+		  g.Pin=GPIO_PIN_8; HAL_GPIO_Init(GPIOH, &g); /* PH8=Cloud_EN, init HIGH */
+		  g.Mode=GPIO_MODE_INPUT; g.Pull=GPIO_PULLUP;
+		  g.Pin=GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12; HAL_GPIO_Init(GPIOC, &g); }
+
+
+
+
 
 	MPU_Config();
 	CPU_CACHE_Enable();
@@ -106,14 +124,14 @@ void System_Init(void)
 	/* 
        ����ϵͳʱ�ӵ�400MHz
        - �л�ʹ��HSE��
-       - �˺���������?�ֱ���SystemCoreClock������������HAL_InitTick��
+       - �˺���������?�ֱ���SystemCoreClock������������HAL_InitTick��
     */
 	SystemClock_Config();
 
 	/* 
 	   Event Recorder��
 	   - �����ڴ���ִ��ʱ�������MDK5.25�������ϰ汾��֧�֣�IAR��֧�֡�
-	   - Ĭ�ϲ���������Ҫʹ�ܴ�ѡ���ؿ�V7�������û��ֲ��?8��
+	   - Ĭ�ϲ���������Ҫʹ�ܴ�ѡ���ؿ�V7�������û��ֲ��?8��
 	*/	
 #if Enable_EventRecorder == 1  
 	/* ��ʼ��EventRecorder������ */
@@ -127,7 +145,7 @@ void System_Init(void)
 /*
 *********************************************************************************************************
 *	�� �� ��: bsp_Init
-*	����˵��: ��ʼ�����е�Ӳ���豸���ú�������CPU�Ĵ���������ļĴ�������ʼ��һЩ�?�ֱ�����ֻ��Ҫ����һ��
+*	����˵��: ��ʼ�����е�Ӳ���豸���ú�������CPU�Ĵ���������ļĴ�������ʼ��һЩ�?�ֱ�����ֻ��Ҫ����һ��
 *	��    ��: ��
 *	�� �� ֵ: ��
 *********************************************************************************************************
@@ -141,10 +159,10 @@ void Bsp_DisableUnalignedFaultTrap(void)
 
 /*
 *********************************************************************************************************
-*   �? �? �?: bsp_Init
-*   功能说明: bsp_Init 的函数接口或内部实现�?
-*   �?    �?: 参�?�函数声明�??
-*   �? �? �?: 参�?�函数声明�??
+*   �? �? �?: bsp_Init
+*   功能说明: bsp_Init 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
 *********************************************************************************************************
 */
 void bsp_Init(void)
@@ -191,8 +209,8 @@ static void SystemClock_Config(void)
 	MODIFY_REG(PWR->CR3, PWR_CR3_SCUEN, 0);
 
 	/* 
-      1��оƬ�ڲ���LDO��ѹ������ĵ�ѹ��Χ�����?VOS1��VOS2��VOS3����ͬ��Χ��Ӧ��ͬ��Flash���ٶȣ�
-         ���鿴�ο��ֲ��Table 12�ı��?
+      1��оƬ�ڲ���LDO��ѹ������ĵ�ѹ��Χ�����?VOS1��VOS2��VOS3����ͬ��Χ��Ӧ��ͬ��Flash���ٶȣ�
+         ���鿴�ο��ֲ��Table 12�ı��?
       2������ѡ��ʹ��VOS1����ѹ��Χ1.15V - 1.26V��
     */
 	__HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
@@ -222,7 +240,7 @@ static void SystemClock_Config(void)
 	}
 
 	/* 
-       ѡ��PLL��������?ϵͳʱ��
+       ѡ��PLL��������?ϵͳʱ��
        ����RCC_CLOCKTYPE_SYSCLKϵͳʱ��
        ����RCC_CLOCKTYPE_HCLK ʱ�ӣ���ӦAHB1��AHB2��AHB3��AHB4����
        ����RCC_CLOCKTYPE_PCLK1ʱ�ӣ���ӦAPB1����
@@ -325,23 +343,23 @@ static void MPU_Config( void )
 	/* ����FMC��չIO��MPU����ΪDevice����Strongly Ordered */
 	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
 	MPU_InitStruct.BaseAddress      = 0x60000000;
-	MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_64KB;	
+	MPU_InitStruct.Size             = MPU_REGION_SIZE_64MB;	
 	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-	MPU_InitStruct.IsBufferable     = MPU_ACCESS_BUFFERABLE;
-	MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;	/* ������MPU_ACCESS_CACHEABLE�������?2��CS��WE�ź� */
-	MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+	MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
+	MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;	/* ������MPU_ACCESS_CACHEABLE�������?2��CS��WE�ź� */
+	MPU_InitStruct.IsShareable      = MPU_ACCESS_SHAREABLE;
 	MPU_InitStruct.Number           = MPU_REGION_NUMBER1;
 	MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL0;
 	MPU_InitStruct.SubRegionDisable = 0x00;
-	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
 	
 	HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
-	/* Region 2: 全体 SDRAM (0xC0000000, 32MB) �? Write-Through, No Write-Allocate
+	/* Region 2: 全体 SDRAM (0xC0000000, 32MB) �? Write-Through, No Write-Allocate
 	 * TEX=0, C=1, B=0
-	 * 覆盖�?�? SDRAM，包�?物理缓冲区（LTDC 直接�? SDRAM）和其他用�?��??
-	 * 物理缓冲�? (0xC0100000 / 0xC0200000) 使用此属性：
-	 *   CPU 旋转写直�? SDRAM �? LTDC 无需任何 CleanDCache 即可读到�?新数�? */
+	 * 覆盖�?�? SDRAM，包�?物理缓冲区（LTDC 直接�? SDRAM）和其他用�?��??
+	 * 物理缓冲�? (0xC0100000 / 0xC0200000) 使用此属性：
+	 *   CPU 旋转写直�? SDRAM �? LTDC 无需任何 CleanDCache 即可读到�?新数�? */
 	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
 	MPU_InitStruct.BaseAddress      = 0xC0000000;
 	MPU_InitStruct.Size             = MPU_REGION_SIZE_32MB;
@@ -401,14 +419,14 @@ static void MPU_Config( void )
 	HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
 	/*
-	 * PlotBuf / 波形缓冲�? emWin GUI_ALLOC �?动�?�分配，基址随构建与堆变化，�?动时无法�? MPU_Config 写�?��?�夹心�?�区�?
-	 * 若将来把波形缓冲改为链接器固定�?�，�?在�?��?�加更高区号（�?? Region4）压�? Region0 的一小�?�：�?�? RW、两�? NO_ACCESS�?
-	 * 勿用整�?? 0x2407xxxx �? emWin BSS 全只读：会与 WM 正常写全�?冲突�?
+	 * PlotBuf / 波形缓冲�? emWin GUI_ALLOC �?动�?�分配，基址随构建与堆变化，�?动时无法�? MPU_Config 写�?��?�夹心�?�区�?
+	 * 若将来把波形缓冲改为链接器固定�?�，�?在�?��?�加更高区号（�?? Region4）压�? Region0 的一小�?�：�?�? RW、两�? NO_ACCESS�?
+	 * 勿用整�?? 0x2407xxxx �? emWin BSS 全只读：会与 WM 正常写全�?冲突�?
 	 */
 
-	/* 默�?�路径：逻辑缓冲与物理缓冲使�? Region 2 �? Write-Through�?
-	 * 当前排查�?径可通过 Region 3 将显�? VRAM 临时覆盖�? Non-Cacheable�?
-	 * 用于验证 WT SDRAM �?见�?�是否�?�致偶发屏闪�? */
+	/* 默�?�路径：逻辑缓冲与物理缓冲使�? Region 2 �? Write-Through�?
+	 * 当前排查�?径可通过 Region 3 将显�? VRAM 临时覆盖�? Non-Cacheable�?
+	 * 用于验证 WT SDRAM �?见�?�是否�?�致偶发屏闪�? */
 
 	/*ʹ�� MPU */
 	HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
@@ -427,7 +445,7 @@ static void CPU_CACHE_Enable(void)
 	/* ʹ�� I-Cache */
 	SCB_EnableICache();
 
-	/* ʹ�� D-Cache（Y_T_AB_DISABLE_DCACHE=1 时跳过，仅作 A/B 定位�? */
+	/* ʹ�� D-Cache（Y_T_AB_DISABLE_DCACHE=1 时跳过，仅作 A/B 定位�? */
 #if (Y_T_AB_DISABLE_DCACHE == 0)
 	SCB_EnableDCache();
 #endif
@@ -438,8 +456,8 @@ static void CPU_CACHE_Enable(void)
 /*
 *********************************************************************************************************
 *	�� �� ��: bsp_RunPer10ms
-*	����˵��: �ú���ÿ��10ms��Systick�жϵ���1�Ρ����? bsp_timer.c�Ķ�ʱ�жϷ������һЩ����ʱ���?���ϸ��?
-*			������Է��ڴ˺��������磺�����?�衢���������п��Ƶȡ�
+*	����˵��: �ú���ÿ��10ms��Systick�жϵ���1�Ρ����? bsp_timer.c�Ķ�ʱ�жϷ������һЩ����ʱ���?���ϸ��?
+*			������Է��ڴ˺��������磺�����?�衢���������п��Ƶȡ�
 *	��    ��: ��
 *	�� �� ֵ: ��
 *********************************************************************************************************
@@ -452,7 +470,7 @@ void bsp_RunPer10ms(void)
 /*
 *********************************************************************************************************
 *	�� �� ��: bsp_RunPer1ms
-*	����˵��: �ú���ÿ��1ms��Systick�жϵ���1�Ρ����? bsp_timer.c�Ķ�ʱ�жϷ������һЩ���?�����Դ��������?
+*	����˵��: �ú���ÿ��1ms��Systick�жϵ���1�Ρ����? bsp_timer.c�Ķ�ʱ�жϷ������һЩ���?�����Դ��������?
 *			 ���Է��ڴ˺��������磺��������ɨ�衣
 *	��    ��: ��
 *	�� �� ֵ: ��
@@ -489,19 +507,19 @@ void bsp_Idle(void)
 *********************************************************************************************************
 *	�� �� ��: HAL_Delay
 *	����˵��: �ض�������ӳٺ������滻HAL�еĺ�������ΪHAL�е�ȱʡ����������Systick�жϣ������USB��SD��
-*             �ж������ӳٺ��������������Ҳ�����?������HAL_NVIC_SetPriority����Systick�ж�
+*             �ж������ӳٺ��������������Ҳ�����?������HAL_NVIC_SetPriority����Systick�ж�
 *	��    ��: ��
 *	�� �� ֵ: ��
 *********************************************************************************************************
 */
-/* ��ǰ����ʹ��stm32h7xx_hal.cĬ�Ϸ�ʽʵ�֣�δʹ�������ض���ĺ���? */
+/* ��ǰ����ʹ��stm32h7xx_hal.cĬ�Ϸ�ʽʵ�֣�δʹ�������ض���ĺ���? */
 #if 0
 /*
 *********************************************************************************************************
-*   �? �? �?: HAL_Delay
-*   功能说明: HAL_Delay 的函数接口或内部实现�?
-*   �?    �?: 参�?�函数声明�??
-*   �? �? �?: 参�?�函数声明�??
+*   �? �? �?: HAL_Delay
+*   功能说明: HAL_Delay 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
 *********************************************************************************************************
 */
 void HAL_Delay(uint32_t Delay)

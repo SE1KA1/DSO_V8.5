@@ -23,6 +23,7 @@ typedef enum {
     UI_SCR_TRIGGER,
     UI_SCR_MEASURE,
     UI_SCR_SYSTEM,
+    UI_SCR_SWITCH,
     UI_SCR_COUNT
 } UI_ScreenId_t;
 

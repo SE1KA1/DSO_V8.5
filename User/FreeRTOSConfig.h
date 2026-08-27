@@ -73,8 +73,9 @@
 #define configMAX_PRIORITIES					( 7 )
 /* 宏定义: configMINIMAL_STACK_SIZE - configMINIMAL_STACK_SIZE 的宏定义。 */
 #define configMINIMAL_STACK_SIZE				( ( unsigned short ) 130 )
-/* emWin/DSO 任务栈自 heap_4 分配；增大栈深后需同步加大堆，避免 xTaskCreate/pvPortMalloc 失败 */
-#define configTOTAL_HEAP_SIZE					( ( size_t ) ( 148 * 1024 ) )
+/* emWin/DSO 任务栈自 heap_4 分配；增大栈深后需同步加大堆，避免 xTaskCreate/pvPortMalloc 失败。
+ * 148KB 时 LwIP tcpip 线程创建耗尽堆（FMC16 任务加入后）；AXI SRAM 实测余 359KB，加到 160KB。 */
+#define configTOTAL_HEAP_SIZE					( ( size_t ) ( 160 * 1024 ) )
 /* 宏定义: configMAX_TASK_NAME_LEN - configMAX_TASK_NAME_LEN 的宏定义。 */
 #define configMAX_TASK_NAME_LEN					( 10 )
 /* 宏定义: configUSE_TRACE_FACILITY - configUSE_TRACE_FACILITY 的宏定义。 */

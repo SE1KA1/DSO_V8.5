@@ -63,7 +63,9 @@ static u8_t ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     return 1; /* eaten */
   }
 
-  pbuf_free(p);
+  /* 非 echo-reply（含 PC 发来的 echo request）：不得释放 pbuf！
+   * LwIP raw 契约：返回 0 = 未消费 → icmp_input 会用同一 pbuf 构造回包并释放。
+   * 若在此释放会双重释放 → RX_POOL 损坏 → RX 卡死（此前 ping 无回应的根因）。 */
   return 0; /* not eaten, let LwIP handle */
 }
 

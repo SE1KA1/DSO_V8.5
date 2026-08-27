@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER, STM32H743xx,ARM_MATH_CM7,DSO_PLOTBUF_GUARD_ENABLE=1,MAINTASK_STACK_LOG_INTERVAL_MS=2000</Define>
               <Undefine></Undefine>
-              <IncludePath>..\..\Libraries\CMSIS\DSP\Include;..\..\Libraries\CMSIS\Include;..\..\Libraries\CMSIS\Device\ST\STM32H7xx\Include;..\..\Libraries\STM32H7xx_HAL_Driver\Inc;..\..\User\bsp\inc;..\..\User;..\..\User\bsp;..\..\FreeRTOS\include;..\..\FreeRTOS\portable\RVDS\ARM_CM7\r0p1;..\..\emWin;..\..\emWin\Config;..\..\emWin\Include;..\..\User\ui;..\..\LWIP\App;..\..\LWIP\Target;..\..\Middlewares\Third_Party\LwIP\src\include;..\..\Middlewares\Third_Party\LwIP\system;..\..\Drivers\BSP\Components\lan8742;..\..\Middlewares\Third_Party\FreeRTOS\Source\CMSIS_RTOS</IncludePath>
+              <IncludePath>..\..\Libraries\CMSIS\DSP\Include;..\..\Libraries\CMSIS\Include;..\..\Libraries\CMSIS\Device\ST\STM32H7xx\Include;..\..\Libraries\STM32H7xx_HAL_Driver\Inc;..\..\User\bsp\inc;..\..\User;..\..\User\bsp;..\..\FreeRTOS\include;..\..\FreeRTOS\portable\RVDS\ARM_CM7\r0p1;..\..\emWin;..\..\emWin\Config;..\..\emWin\Include;..\..\User\ui;..\..\LWIP\App;..\..\LWIP\Target;..\..\Middlewares\Third_Party\LwIP\src\include;..\..\Middlewares\Third_Party\LwIP\system;..\..\Drivers\BSP\Components\lan8742;..\..\User\dso\fmc16;..\..\Middlewares\Third_Party\FreeRTOS\Source\CMSIS_RTOS</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -515,6 +515,51 @@
               <FilePath>..\..\User\dso\dso_acq_8bit.c</FilePath>
             </File>
             <File>
+              <FileName>fmc16_bus.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_bus.c</FilePath>
+            </File>
+            <File>
+              <FileName>fmc16_crc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_crc.c</FilePath>
+            </File>
+            <File>
+              <FileName>fmc16_packet.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_packet.c</FilePath>
+            </File>
+            <File>
+              <FileName>fmc16_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>fmc16_status.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_status.c</FilePath>
+            </File>
+            <File>
+              <FileName>fmc16_command.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_command.c</FilePath>
+            </File>
+            <File>
+              <FileName>fmc16_io.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_io.c</FilePath>
+            </File>
+            <File>
+              <FileName>fmc16_event.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_event.c</FilePath>
+            </File>
+            <File>
+              <FileName>fmc16_integration.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\fmc16\fmc16_integration.c</FilePath>
+            </File>
+            <File>
               <FileName>dso_engine.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\User\dso\dso_engine.c</FilePath>
@@ -644,6 +689,21 @@
               <FileType>1</FileType>
               <FilePath>..\..\User\dso\dso_vofa_firewater.c</FilePath>
             </File>
+            <File>
+              <FileName>cloud_bridge.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\cloud_bridge.c</FilePath>
+            </File>
+            <File>
+              <FileName>dso_switch_panel.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_switch_panel.c</FilePath>
+            </File>
+            <File>
+              <FileName>dso_switch_cmd.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_switch_cmd.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -733,6 +793,16 @@
               <FileName>bsp_ui_io_expander.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\User\bsp\src\bsp_ui_io_expander.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_i2c_ui.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\bsp\src\bsp_i2c_ui.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_pcal6524.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\bsp\src\bsp_pcal6524.c</FilePath>
             </File>
             <File>
               <FileName>bsp_cpu_dac.c</FileName>
@@ -1033,6 +1103,11 @@
               <FileName>ui_system_setup.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\User\ui\ui_system_setup.c</FilePath>
+            </File>
+            <File>
+              <FileName>ui_switch_panel.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\ui\ui_switch_panel.c</FilePath>
             </File>
             <File>
               <FileName>lcd_rotate_profile.c</FileName>

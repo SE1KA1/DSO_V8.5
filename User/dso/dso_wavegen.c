@@ -236,6 +236,7 @@ void DSO_Wavegen_Task(void *argument)
 
     (void)argument;
 
+    printf("[WAVE] enter\r\n");
     status = DSO_Wavegen_StartFromConfig();
     if (status != DSO_WAVEGEN_OK) {
         printf("[WAVEGEN] task_stop status=%u\r\n", (unsigned)status);
@@ -243,6 +244,15 @@ void DSO_Wavegen_Task(void *argument)
     }
 
     for (;;) {
+        { /* SDRAM integrity check — verify cloud bridge not corrupting FMC */
+            volatile uint16_t *p = (volatile uint16_t *)0xC0000000U;
+            static uint32_t cnt = 0;
+            if ((cnt++ & 0x1F) == 0) {  /* ~every 32 iterations */
+                *p = 0x55AA;
+                if (*p != 0x55AA) printf("[SDRAM] FAIL\r\n");
+                else printf("[SDRAM] OK\r\n");
+            }
+        }
         DSO_WavegenSnapshot snapshot = {0};
         status = DSO_Wavegen_Poll(&snapshot);
         if (status != DSO_WAVEGEN_OK) {
