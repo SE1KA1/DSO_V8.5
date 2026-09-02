@@ -27,6 +27,10 @@ void DSO_Switch_Cmd_Init(void);
  */
 int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz);
 
+/** 最小 JSON 子集：按 key 读取字符串/整数值（容忍空白）。供遥测/命令模块共用。 */
+int DSO_Switch_Cmd_JsonGetStr(const char *line, const char *key, char *buf, size_t buf_sz);
+int DSO_Switch_Cmd_JsonGetInt(const char *line, const char *key, int *out);
+
 #ifdef __cplusplus
 }
 #endif

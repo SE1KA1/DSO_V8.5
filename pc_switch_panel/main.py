@@ -38,7 +38,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("DSO Switch Panel (PC)")
-        self._transport = SwitchTransport()
+        self.\
+            _transport = SwitchTransport()
         self._seq = 0
         self._sw_bits = 0
         self._led_bits = 0

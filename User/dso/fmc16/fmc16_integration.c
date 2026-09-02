@@ -9,6 +9,7 @@
 #include "fmc16_event.h"
 #include "fmc16_io.h"
 #include "fmc16_conf.h"
+#include "../dso_fmc_telemetry.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stdio.h>
@@ -93,6 +94,9 @@ static void dispatch_packet(Fmc16System *sys)
                 FMC16_LOG("EVENT: code=0x%04X src=%u ts=%lu",
                           evt.code, evt.source,
                           (unsigned long)evt.timestamp_ms);
+                /* 遥测：即时推送事件帧到服务器 */
+                DSO_FmcTelemetry_OnEvent(evt.code, evt.timestamp_ms,
+                                         evt.data, evt.data_words);
             }
         }
         break;

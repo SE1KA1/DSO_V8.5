@@ -115,6 +115,14 @@
 #define Y_T_AB_DISABLE_DSO_ENGINE_TASK  0
 #endif
 
+/* 1 = 不创建 MainTask（emWin GUI 任务）。
+ * ETH 吞吐测试模式：GUI_Init 卡死（云桥/FMC 冲突，LCD 空白）且以太网高负载时
+ * 会走到 NULL 设备 API → HardFault。以太网路径不依赖 GUI，禁用后可稳定跑吞吐测试。
+ * 测完恢复 0。 */
+#ifndef Y_T_AB_DISABLE_GUI_TASK
+#define Y_T_AB_DISABLE_GUI_TASK  1
+#endif
+
 /* 1 = keep DSOEng alive but prevent ADC/DMA acquisition from starting.
  * Diagnostic for separating DSOEng init/service from ADC DMA bus activity. */
 #ifndef Y_T_AB_DISABLE_ACQ_START

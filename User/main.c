@@ -19,6 +19,7 @@
 #include "dso/dso_wavegen.h"
 #include "dso/dso_eth_upload.h"
 #include "dso/dso_switch_cmd.h"
+#include "dso/dso_fmc_telemetry.h"
 #include "dso/fmc16/fmc16_integration.h"
 #include "ping.h"
 #include "bsp_vram_layout.h"
@@ -503,14 +504,23 @@ int main(void)
      * 导致 SN74LVC257 输出禁用、开关信号悬空回 3.3V。 */
     DSO_Switch_Cmd_Init();
 
+    /* FMC 遥测推送：任务内部等待 LwIP netif up 后连接服务器 */
+    DSO_FmcTelemetry_Init();
+
 #if (LCD_DIAGNOSTIC_MODE == 1)
     /* 硬件诊断测试：绕过 emWin 直接测试 LTDC */
     LCD_DiagnosticTest();
 #else
+#if (Y_T_AB_DISABLE_GUI_TASK != 1)
     if (xTaskCreate((TaskFunction_t)MainTask, "emWin", 14336, NULL, 2, NULL) != pdPASS) {
         printf("[BOOT] FAIL emWin\r\n");
         Error_Handler(__FILE__, __LINE__);
     }
+#else
+    /* ETH 吞吐测试模式：不创建 MainTask，避免卡死的 GUI_Init 在高负载下走 NULL 设备 API 崩溃。
+     * 以太网路径不依赖 GUI。恢复 GUI 时把 y_t_stress_ab.h 的 Y_T_AB_DISABLE_GUI_TASK 置 0。 */
+    printf("[BOOT] GUI disabled (ETH test mode)\r\n");
+#endif
 
 #if (USE_DSO_ENGINE != 0) && (Y_T_AB_DISABLE_DSO_ENGINE_TASK == 0)
     /* DSO：ETS 等路径 + Y-T 下 MainTask/引擎交互栈较深；与 heap 中 configTOTAL_HEAP_SIZE 同步裕量。 */
@@ -543,6 +553,7 @@ int main(void)
     { printf("[BOOT] FAIL ETH_Up\r\n"); Error_Handler(__FILE__, __LINE__); }
     if (xTaskCreate(DSO_Ping_Task, "Ping", 1024, NULL, 1, NULL) != pdPASS)
     { printf("[BOOT] FAIL Ping\r\n"); Error_Handler(__FILE__, __LINE__); }
+    DSO_ETH_UDP_RX_Init();
 
 #if FMC16_ENABLE
     /* FMC16 云桥服务任务：1ms 轮询 FMC 总线、解析协议包、维护链路 */

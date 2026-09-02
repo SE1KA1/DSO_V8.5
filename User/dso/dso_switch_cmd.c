@@ -23,7 +23,7 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ---- 最小 JSON 子集辅助 ---- */
+/* ---- 最小 JSON 子集辅助（供本模块与 dso_fmc_telemetry 共用） ---- */
 
 /* 返回 "key" 出现的位置（含引号），找不到返回 NULL */
 static const char *json_find_key(const char *line, const char *key)
@@ -186,4 +186,16 @@ void DSO_Switch_Cmd_Init(void)
     if (xTaskCreate(vSwitchSerialTask, "SW_Ser", 512, NULL, 3, NULL) != pdPASS) {
         /* 串口命令任务创建失败不致命：TCP 通道仍可用 */
     }
+}
+
+/* ---- 公共 JSON 辅助（供 dso_fmc_telemetry 解析 command.execute） ---- */
+
+int DSO_Switch_Cmd_JsonGetStr(const char *line, const char *key, char *buf, size_t buf_sz)
+{
+    return json_get_str(line, key, buf, buf_sz);
+}
+
+int DSO_Switch_Cmd_JsonGetInt(const char *line, const char *key, int *out)
+{
+    return json_get_int(line, key, out);
 }

@@ -112,7 +112,7 @@ typedef struct
 } RxBuff_t;
 
 /* Memory Pool Declaration */
-#define ETH_RX_BUFFER_CNT             12U   /* 与参考工程一致，RX 余量更足 */
+#define ETH_RX_BUFFER_CNT             16U   /* 大窗口(8×1460 在途) + DMA 环(4) + 余量 */
 LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX PBUF pool");
 
 /* Variable Definitions */
@@ -596,6 +596,9 @@ void ETH_DebugDumpStatus(void)
          (unsigned long)eth_dbg.lan8720_autoneg_complete,
          (unsigned long)eth_dbg.phy_bcr, (unsigned long)bsr,
          (unsigned long)eth_dbg.lan8720_auto_mdix);
+  printf("[PHY] speed_100=%lu full_duplex=%lu\r\n",
+         (unsigned long)eth_dbg.lan8720_speed_100,
+         (unsigned long)eth_dbg.lan8720_full_duplex);
   printf("[REFCLK] samples=%lu flips=%lu high=%lu low=%lu\r\n",
          (unsigned long)eth_dbg.refclk_sample_count,
          (unsigned long)eth_dbg.refclk_flip_count,

@@ -391,14 +391,15 @@ static void MPU_Config( void )
 	HAL_MPU_ConfigRegion(&MPU_InitStruct);
 #endif
 
-	/* Region 4: ETH DMA descriptors + LwIP heap (0x30000000, D2 SRAM1, 64KB)
+	/* Region 4: ETH DMA descriptors + LwIP heap (0x30000000, D2 SRAM1, 128KB=整个 SRAM1)
+	 * MEM_SIZE 64K 时堆到 0x30014000，128KB 区域覆盖到 0x30020000，防止 DACCVIOL
 	 * Must be Non-Cacheable: DMA controller reads/writes descriptor OWN/status
 	 * bits directly; CPU must always see coherent values.  This also covers
 	 * LWIP_RAM_HEAP_POINTER at 0x30004000 so TX pbuf payloads need no explicit
 	 * cache clean before DMA transmission. */
 	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
 	MPU_InitStruct.BaseAddress      = 0x30000000;
-	MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_64KB;
+	MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_128KB;
 	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
 	MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
 	MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
@@ -415,6 +416,7 @@ static void MPU_Config( void )
 	 * payload backing RX_POOL at 0x38000000 goes through SCB_InvalidateDCache
 	 * in HAL_ETH_RxLinkCallback, which is a safe no-op on NC memory. */
 	MPU_InitStruct.BaseAddress      = 0x38000000;
+	MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_64KB;
 	MPU_InitStruct.Number           = MPU_REGION_NUMBER5;
 	HAL_MPU_ConfigRegion(&MPU_InitStruct);
 

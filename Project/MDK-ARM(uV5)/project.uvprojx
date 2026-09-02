@@ -704,6 +704,11 @@
               <FileType>1</FileType>
               <FilePath>..\..\User\dso\dso_switch_cmd.c</FilePath>
             </File>
+            <File>
+              <FileName>dso_fmc_telemetry.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_fmc_telemetry.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

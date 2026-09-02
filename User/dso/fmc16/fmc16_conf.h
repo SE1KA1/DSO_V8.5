@@ -76,6 +76,22 @@ extern "C" {
 #define FMC16_DEBUG                 1
 #endif
 
+/* ========================================================================
+ * 五、遥测推送（dso_fmc_telemetry.c）
+ * ======================================================================== */
+
+/** 遥测服务器 IP（STM32 作为 TCP 客户端主动连接） */
+#define FMC_TEL_SERVER_IP0  192
+#define FMC_TEL_SERVER_IP1  168
+#define FMC_TEL_SERVER_IP2  100
+#define FMC_TEL_SERVER_IP3  100
+
+/** 遥测服务器端口 */
+#define FMC_TEL_SERVER_PORT 5005U
+
+/** 周期快照推送间隔（ms） */
+#define FMC_TEL_PERIOD_MS   500U
+
 /** 调试标签 */
 #define FMC16_TAG                   "[FMC16]"
 
