@@ -8,7 +8,7 @@ not shown, per the design constraint.
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 # Palette mirroring the LCD theme (ui_theme.h)
@@ -66,21 +66,28 @@ class LedWidget(QWidget):
 
 
 class SwitchWidget(QWidget):
-    """A vertical 2-segment DIP switch (ON green top / OFF grey bottom).
+    """A compact DIP switch controlled by a horizontal swipe.
 
-    Clicking emits :attr:`clicked` with the switch index; the caller decides
-    the new state (toggle) and sends the command.
+    Press and drag sideways past :attr:`SWIPE_THRESHOLD` px: drag LEFT → ON
+    (card turns green), drag RIGHT → OFF (card turns dark). Short drags leave
+    the switch unchanged. Emits :attr:`swiped` with (index, on); the caller
+    sends the set_sw command.
     """
 
-    clicked = Signal(int)
+    swiped = Signal(int, int)          # (switch index, 1=ON / 0=OFF)
+
+    SWIPE_THRESHOLD = 16               # horizontal px needed to trigger
 
     def __init__(self, index: int, label: str | None = None, parent=None) -> None:
         super().__init__(parent)
         self._index = index
         self._label = label if label is not None else f"SW{index + 1}"
         self._on = False
-        self.setFixedSize(132, 106)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._press = None             # press position (QPointF) while dragging
+        self._preview = None           # None | bool target state during drag
+        self.setFixedSize(46, 23)
+        self.setToolTip(label)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     @property
     def index(self) -> int:
@@ -89,57 +96,90 @@ class SwitchWidget(QWidget):
     def set_on(self, on: bool) -> None:
         if on != self._on:
             self._on = on
-            self.update()
+            if self._preview is None:  # don't fight a live swipe preview
+                self.update()
+
+    # ---- swipe interaction -------------------------------------------------
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt name)
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self._index)
+            self._press = event.position()
+            self._preview = None
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.grabMouse()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt name)
+        if self._press is None:
+            return
+        dx = event.position().x() - self._press.x()
+        if dx <= -self.SWIPE_THRESHOLD:
+            target = True               # swipe LEFT  → ON (green)
+        elif dx >= self.SWIPE_THRESHOLD:
+            target = False              # swipe RIGHT → OFF (dark)
+        else:
+            target = None               # below threshold: keep current look
+        if target is not None and target != self._preview:
+            self._preview = target
+            self.update()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt name)
+        if self._press is None:
+            return
+        dx = event.position().x() - self._press.x()
+        self.releaseMouse()
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        decided: bool | None = None
+        if dx <= -self.SWIPE_THRESHOLD:
+            decided = True
+        elif dx >= self.SWIPE_THRESHOLD:
+            decided = False
+        self._preview = None
+        self._press = None
+        if decided is not None and decided != self._on:
+            self._on = decided          # optimistic local visual
+            self.swiped.emit(self._index, 1 if decided else 0)
+        self.update()
+
+    # ---- painting ----------------------------------------------------------
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt name)
         del event
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w = self.width()
-        x, y = 3, 2
-        sw_w, sw_h = w - 6, 62
-        mid = y + sw_h // 2
+        h = self.height()
+        on = self._preview if self._preview is not None else self._on
 
-        # card
-        p.setPen(QPen(CLR_CARD_BR, 1))
-        p.setBrush(CLR_CARD)
-        p.drawRoundedRect(x, y, sw_w, sw_h, 4, 4)
+        # 迷你开关：卡片几乎占满部件（B 编号走 tooltip，不再占一行）
+        card = QRect(3, 2, w - 6, h - 4)
+        half = card.width() // 2
+        card_rad = card.height() // 2          # 药丸形圆角
+        thumb_rad = (card.height() - 2) // 2
 
-        # top (ON) / bottom (OFF) segments
+        # 轨道：ON 绿色带纵向渐变（顶部亮） / OFF 深色
         p.setPen(Qt.PenStyle.NoPen)
-        if self._on:
-            p.setBrush(CLR_RUN_FG)
-            p.drawRect(x + 3, y + 3, sw_w - 6, mid - y - 3)
-            p.setBrush(CLR_OFF_TOP)
-            p.drawRect(x + 3, mid, sw_w - 6, sw_h - mid - 3)
+        if on:
+            track = QLinearGradient(0, card.top(), 0, card.bottom())
+            track.setColorAt(0.0, QColor(0x52, 0xD6, 0x6C))
+            track.setColorAt(1.0, QColor(0x2A, 0x8F, 0x42))
+            p.setBrush(track)
         else:
             p.setBrush(CLR_OFF_TOP)
-            p.drawRect(x + 3, y + 3, sw_w - 6, mid - y - 3)
-            p.setBrush(CLR_RUN_BG)
-            p.drawRect(x + 3, mid, sw_w - 6, sw_h - mid - 3)
+        p.drawRoundedRect(card, card_rad, card_rad)
 
-        # divider
-        p.setPen(QPen(CLR_DIV, 1))
-        p.drawLine(x + 3, mid, x + sw_w - 3, mid)
+        # 白色圆角 thumb：ON 在左半（右侧露绿） / OFF 在右半（左侧露深色）
+        inset = 2
+        th = card.height() - 2 * inset
+        tw = half - inset                       # ≈半宽
+        if on:
+            thumb = QRect(card.left() + inset, card.top() + inset, tw, th)
+        else:
+            thumb = QRect(card.left() + half + 1, card.top() + inset, tw, th)
+        p.setBrush(Qt.GlobalColor.white)
+        p.drawRoundedRect(thumb, thumb_rad, thumb_rad)
 
-        # ON / OFF markers
-        f = QFont()
-        f.setPointSize(8)
-        p.setFont(f)
-        p.setPen(CLR_TEXT_HI if self._on else CLR_TEXT_DIM)
-        p.drawText(QRect(x, y + 2, sw_w, 14),
-                   Qt.AlignmentFlag.AlignCenter, "ON" if self._on else "")
-        p.drawText(QRect(x, mid + 2, sw_w, 14),
-                   Qt.AlignmentFlag.AlignCenter, "" if self._on else "OFF")
-
-        # switch label (e.g. "B1" / "B11")
-        f.setPointSize(10)
-        p.setFont(f)
-        p.setPen(CLR_TEXT_HI)
-        p.drawText(QRect(0, y + sw_h + 2, w, 20),
-                   Qt.AlignmentFlag.AlignCenter, self._label)
+        # 卡片描边（统一深色，不随 ON 变绿，避免"包围"感）
+        p.setPen(QPen(CLR_CARD_BR, 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(card, card_rad, card_rad)
         p.end()

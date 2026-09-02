@@ -27,7 +27,7 @@ extern "C" {
 #define DSO_SHT40_POLL_MS           1000u
 
 /** 高温报警阈值（百分之一 ℃）�?6000 = 60.00 ℃。温度严格大于此值报警�? */
-#define DSO_SHT40_ALARM_HI_CENTI    3300
+#define DSO_SHT40_ALARM_HI_CENTI    6000
 
 /** 连续失败超过该次数标记无效（temp_ok=0），此后每次成功自动恢复 */
 #define DSO_SHT40_FAIL_INVALID_N    10u

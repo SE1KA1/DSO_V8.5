@@ -1,8 +1,9 @@
 """Switch panel GUI — replicate the LCD switch-panel page on PC.
 
-Click a DIP switch to flip the corresponding switch on the device over TCP
-5005 (JSON control command ``set_sw``). A 500 ms poll of ``get_switch`` keeps
-the UI in sync with device-side changes (e.g. EC1 toggles on the LCD).
+DIP switches sit in a compact right-hand column; press and swipe LEFT to turn
+a switch ON, RIGHT to turn it OFF (``set_sw`` over TCP 5005). A 500 ms poll of
+``get_switch`` keeps the UI in sync with device-side changes and refreshes the
+SHT40 temperature readout.
 
 Usage:
     python main.py [host [port]]
@@ -56,7 +57,13 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         central = QWidget()
-        root = QVBoxLayout(central)
+        outer = QHBoxLayout(central)
+        outer.setContentsMargins(6, 6, 6, 6)
+        root = QVBoxLayout()                   # left column: conn / LED / temp / log
+        outer.addLayout(root, 1)
+        right = QVBoxLayout()                  # right-most switch sidebar
+        right.setContentsMargins(4, 0, 10, 0)  # 与窗口右缘留余地
+        outer.addLayout(right)
 
         # connection bar
         bar = QHBoxLayout()
@@ -135,30 +142,24 @@ class MainWindow(QMainWindow):
         temp_row.addStretch(1)
         root.addLayout(temp_row)
 
-        # 10-bit DIP (B1..B9, 3 x 3)
-        title = QLabel("10-BIT DIP")
-        title.setStyleSheet("font-weight: bold;")
-        root.addWidget(title)
-        g10 = QGridLayout()
-        for c, idx in enumerate(DIP10_INDICES):
+        # 右侧开关栏：全部开关(B1..B9, B11..B14)自上而下单列，编号灰字在开关右侧；
+        # 按住左右滑动控制——左滑开(变绿)/右滑关(变深色)
+        hint = QLabel("SWITCHES   ⟵ON   OFF⟶")
+        hint.setStyleSheet("color: #888; font-weight: bold;")
+        right.addWidget(hint)
+        for idx in ALL_INDICES:
+            row = QHBoxLayout()
             sw = SwitchWidget(idx, label=f"B{idx + 1}")
-            sw.clicked.connect(self._on_switch_clicked)
+            sw.swiped.connect(self._on_swipe)
             self._sws.append(sw)
-            g10.addWidget(sw, c // 3, c % 3)
-        root.addLayout(g10)
-
-        # 4-bit DIP (B11..B14, 1 x 4)
-        title = QLabel("4-BIT DIP")
-        title.setStyleSheet("font-weight: bold;")
-        root.addWidget(title)
-        g4 = QHBoxLayout()
-        for idx in DIP4_INDICES:
-            sw = SwitchWidget(idx, label=f"B{idx + 1}")
-            sw.clicked.connect(self._on_switch_clicked)
-            self._sws.append(sw)
-            g4.addWidget(sw)
-        g4.addStretch(1)
-        root.addLayout(g4)
+            row.addWidget(sw)
+            row.addSpacing(6)
+            num = QLabel(f"B{idx + 1}")
+            num.setStyleSheet("color: #888;")
+            row.addWidget(num)
+            row.addStretch(1)
+            right.addLayout(row)
+        right.addStretch(1)
 
         # 串口原始输出日志面板（显示收到的所有行，含 [SER]/[BOOT] 等调试信息）
         log_title = QLabel("SERIAL LOG")
@@ -172,7 +173,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self._log)
 
         self.setCentralWidget(central)
-        self.setMinimumSize(820, 800)
+        self.setMinimumSize(700, 700)
         self.setStatusBar(QStatusBar())
         self._set_status("disconnected")
 
@@ -231,10 +232,11 @@ class MainWindow(QMainWindow):
         self._btn_disc.setEnabled(False)
         self._set_status("disconnected")
 
-    def _on_switch_clicked(self, idx: int) -> None:
+    def _on_swipe(self, idx: int, on: int) -> None:
+        """SwitchWidget swipe result: LEFT=ON(1) / RIGHT=OFF(0), absolute set."""
         if not self._transport.is_open:
             return
-        desired = 0 if ((self._sw_bits >> idx) & 1) else 1
+        desired = 1 if on else 0
         self._seq += 1
         self._append_log(f"> set_sw sw={idx} on={desired}")
         self._transport.send_cmd("set_sw", {"sw": idx, "on": desired}, self._seq)
