@@ -120,12 +120,13 @@ class SwitchTransport:
         return item
 
     def query_state(self, timeout: float = 1.0,
-                    on_line=None) -> tuple[int, int] | None:
-        """Send get_switch and parse the ack's data → (sw, led). None on no reply.
+                    on_line=None) -> tuple[int, int, int | None, int] | None:
+        """Send get_switch; return (sw, led, temp_dezi, temp_ok). None on no reply.
 
-        Skips any interleaved lines that are not the get_switch ack (e.g. stale
-        set_sw acks), so the caller can poll freely. Every line read is passed to
-        ``on_line(line)`` if provided (for a raw serial log view).
+        ``temp_dezi`` is the SHT40 temperature in tenths of a degree (245 = 24.5°C),
+        or None when the device/firmware omits it. Skips any interleaved lines that
+        are not the get_switch ack (e.g. stale set_sw acks), so the caller can poll
+        freely. Every line read is passed to ``on_line(line)`` if provided.
         """
         self.send_cmd("get_switch")
         deadline = time.monotonic() + timeout
@@ -149,7 +150,10 @@ class SwitchTransport:
                 try:
                     sw = int(data.get("sw", 0))
                     led = int(data.get("led", 0))
+                    raw = data.get("temp")
+                    temp_dezi = int(raw) if raw is not None else None
+                    temp_ok = int(data.get("temp_ok", 0))
                 except (TypeError, ValueError):
                     continue
-                return sw, led
+                return sw, led, temp_dezi, temp_ok
             # not our ack — keep reading

@@ -709,6 +709,11 @@
               <FileType>1</FileType>
               <FilePath>..\..\User\dso\dso_fmc_telemetry.c</FilePath>
             </File>
+            <File>
+              <FileName>dso_sht40.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_sht40.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

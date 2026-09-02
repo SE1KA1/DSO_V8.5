@@ -88,6 +88,10 @@ class DSOSimulator:
         # switch panel model (mirror dso_switch_panel.c)
         self.sw_bits = 0          # 14-bit bitmap, bit0=SW1 .. bit13=SW14
         self.led_bits = 0b011     # LED1 heartbeat + LED2 power on
+        # SHT40 temperature (tenths of a degree) — alarm threshold mirrors
+        # dso_sht40.h DSO_SHT40_ALARM_HI_CENTI=6000 → 600 dezi
+        self.temp_dezi = 250      # 25.0 °C
+        self.temp_ok = 1
 
         # status / telemetry
         self.running = True
@@ -256,8 +260,20 @@ class DSOSimulator:
                 else:
                     ack.result = "error"
                     ack.error = "bad_sw"
+            elif cmd == "set_temp":
+                # 离线演示：temp 为十分之一 ℃，>600(60.0℃) 置 LED3 ALARM（镜像 dso_sht40）
+                try:
+                    t = int(params.get("temp"))
+                except (TypeError, ValueError):
+                    ack.result = "error"
+                    ack.error = "bad_temp"
+                else:
+                    self.temp_dezi = t
+                    self.temp_ok = 1
+                    self.led_bits = (self.led_bits & ~0x04) | (0x04 if t > 600 else 0)
             elif cmd == "get_switch":
-                ack.data = {"sw": self.sw_bits, "led": self.led_bits}
+                ack.data = {"sw": self.sw_bits, "led": self.led_bits,
+                            "temp": self.temp_dezi, "temp_ok": self.temp_ok}
             elif cmd == "get_config":
                 pass  # no-op, config is exposed via read_frame()
             elif cmd == "reboot":

@@ -120,7 +120,7 @@
  * 会走到 NULL 设备 API → HardFault。以太网路径不依赖 GUI，禁用后可稳定跑吞吐测试。
  * 测完恢复 0。 */
 #ifndef Y_T_AB_DISABLE_GUI_TASK
-#define Y_T_AB_DISABLE_GUI_TASK  1
+#define Y_T_AB_DISABLE_GUI_TASK  0
 #endif
 
 /* 1 = keep DSOEng alive but prevent ADC/DMA acquisition from starting.

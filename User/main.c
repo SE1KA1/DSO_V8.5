@@ -19,6 +19,7 @@
 #include "dso/dso_wavegen.h"
 #include "dso/dso_eth_upload.h"
 #include "dso/dso_switch_cmd.h"
+#include "dso/dso_sht40.h"
 #include "dso/dso_fmc_telemetry.h"
 #include "dso/fmc16/fmc16_integration.h"
 #include "ping.h"
@@ -503,6 +504,9 @@ int main(void)
      * bsp_fmc_io 会把 PH8(G#/Cloud_EN) 重配为 AF12_FMC(上拉)，覆盖 PH8=LOW，
      * 导致 SN74LVC257 输出禁用、开关信号悬空回 3.3V。 */
     DSO_Switch_Cmd_Init();
+
+    /* 过桥板 SHT40 温度采样任务（1s 周期，与 PCAL6524 共用 PB7/PB8 软件 I2C） */
+    DSO_Sht40_Init();
 
     /* FMC 遥测推送：任务内部等待 LwIP netif up 后连接服务器 */
     DSO_FmcTelemetry_Init();

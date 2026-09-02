@@ -23,7 +23,7 @@ from serial_transport import SerialTransport, discover_ch340
 from transport import SwitchTransport
 from widgets import LedWidget, SwitchWidget
 
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "192.168.100.50"
 DEFAULT_PORT = 5005
 
 # 模型位序（bit0=B1 … bit13=B14；bit9=B10 悬空不可控，不显示）
@@ -117,6 +117,23 @@ class MainWindow(QMainWindow):
             led_row.addWidget(led)
         led_row.addStretch(1)
         root.addLayout(led_row)
+
+        # Temperature readout (SHT40 on the bridge board; refreshed each poll)
+        title = QLabel("TEMPERATURE")
+        title.setStyleSheet("font-weight: bold;")
+        root.addWidget(title)
+        temp_row = QHBoxLayout()
+        self._temp_val = QLabel("--.- °C")
+        tf = self._temp_val.font()
+        tf.setPointSize(18)
+        tf.setBold(True)
+        self._temp_val.setFont(tf)
+        temp_row.addWidget(self._temp_val)
+        self._temp_hint = QLabel("SHT40")
+        self._temp_hint.setStyleSheet("color: #888;")
+        temp_row.addWidget(self._temp_hint)
+        temp_row.addStretch(1)
+        root.addLayout(temp_row)
 
         # 10-bit DIP (B1..B9, 3 x 3)
         title = QLabel("10-BIT DIP")
@@ -233,12 +250,28 @@ class MainWindow(QMainWindow):
         if st is None:
             self._set_status("no reply — check link")
             return
-        sw, led = st
+        sw, led, temp_dezi, temp_ok = st
         if sw != self._sw_bits or led != self._led_bits:
             self._sw_bits = sw
             self._led_bits = led
             self._apply()
+        self._set_temp_display(temp_dezi, temp_ok, alarm=bool((led >> 2) & 1))
         self._set_status("online")
+
+    def _set_temp_display(self, temp_dezi: int | None, temp_ok: int,
+                          alarm: bool) -> None:
+        """温度标签：temp_ok=0 或字段缺失 → "--.- °C"；报警(led bit2)→ 红色。"""
+        if temp_ok and temp_dezi is not None:
+            text = f"{temp_dezi / 10.0:.1f} °C"
+        else:
+            text = "--.- °C"
+        self._temp_val.setText(text)
+        if alarm:
+            self._temp_val.setStyleSheet("color: #FF3B30;")
+        elif temp_ok and temp_dezi is not None:
+            self._temp_val.setStyleSheet("color: #1B1F27;")
+        else:
+            self._temp_val.setStyleSheet("color: #9AA0A6;")
 
     def _apply(self) -> None:
         for sw in self._sws:

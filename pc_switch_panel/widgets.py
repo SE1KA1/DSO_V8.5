@@ -48,11 +48,13 @@ class LedWidget(QWidget):
         w = self.width()
         cx, cy, r = w // 2, 42, 16
 
+        # dot: colored when ON, grey when OFF
         p.setPen(QPen(CLR_TEXT_DIM, 1))
         p.setBrush(LED_ON_COLORS[self._index] if self._on else CLR_TEXT_DIM)
         p.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
 
-        p.setPen(CLR_TEXT_HI if self._on else CLR_TEXT_DIM)
+        # label text stays grey regardless of LED state (visible on light bg)
+        p.setPen(CLR_TEXT_DIM)
         small = QFont()
         small.setPointSize(8)
         p.setFont(small)

@@ -31,7 +31,9 @@ python -m venv .venv
 | GUI → DSO | `{"cmd":"set_sw","params":{"sw":5,"on":1},"seq":7}` |
 | GUI → DSO | `{"cmd":"get_switch","params":{},"seq":8}` |
 | DSO → GUI | `{"ver":"0.9","type":"ack","seq":..,"cmd":"set_sw","result":"ok","error":""}` |
-| DSO → GUI | `{"ver":"0.9","type":"ack","seq":..,"cmd":"get_switch","result":"ok","error":"","data":{"sw":16383,"led":5}}` |
+| DSO → GUI | `{"ver":"0.9","type":"ack","seq":..,"cmd":"get_switch","result":"ok","error":"","data":{"sw":16383,"led":5,"temp":245,"temp_ok":1}}` |
 
 - `sw` = 14-bit bitmap（bit0=SW1 … bit13=SW14）；`led` = 3-bit（bit0=心跳, bit1=电源, bit2=报警）
-- 点击开关 → 翻转目标态 → `set_sw`；500ms 轮询 `get_switch` 收敛设备侧改动。
+- `temp` = 过桥板 SHT40 温度（十分之一 ℃，245 = 24.5℃）；`temp_ok` = 传感器有效（0 时 GUI 显示 `--.- ℃`）
+- **bit2 报警** = SHT40 温度 > 60.0℃（阈值见 `User/dso/dso_sht40.h` `DSO_SHT40_ALARM_HI_CENTI`）
+- 点击开关 → 翻转目标态 → `set_sw`；500ms 轮询 `get_switch` 收敛设备侧改动 + 刷新温度。

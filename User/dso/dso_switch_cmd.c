@@ -6,16 +6,19 @@
  *   请求  {"cmd":"set_sw","params":{"sw":5,"on":1},"seq":7}
  *   请求  {"cmd":"get_switch","params":{},"seq":8}
  *   应答  {"ver":"0.9","type":"ack","seq":7,"cmd":"set_sw","result":"ok","error":""}
- *   应答  {"ver":"0.9","type":"ack","seq":8,"cmd":"get_switch","result":"ok","error":"","data":{"sw":16383,"led":5}}
+ *   应答  {"ver":"0.9","type":"ack","seq":8,"cmd":"get_switch","result":"ok","error":"","data":{"sw":16383,"led":5,"temp":245,"temp_ok":1}}
  *
  * sw = 14-bit bitmap（bit0=SW1 … bit13=SW14），led = 3-bit（bit0=心跳 bit1=电源 bit2=报警）。
- * 解析为最小 JSON 子集：容忍 json.dumps 默认分隔符（冒号前后空格）。
+ * temp = SHT40 温度（十分之一 ℃，245 = 24.5℃）；temp_ok=1 表示传感器有效。
+ * bit2 报警 = 温度 > 60℃（dso_sht40 模块提供，现算）。解析为最小 JSON 子集：
+ * 容忍 json.dumps 默认分隔符（冒号前后空格）。
  *
  * LED0（心跳）不设独立任务：FreeRTOS 堆已被任务栈占满（148KB 临界），
  * 心跳在 get_switch 应答时按系统 tick 实时计算（1s 周期翻转），零堆开销。
  */
 #include "dso_switch_cmd.h"
 #include "dso_switch_panel.h"
+#include "dso_sht40.h"
 #include "bsp.h"              /* stm32h7xx_hal + bsp_uart_fifo（提供 USART_TypeDef/__IO 前置） */
 #include "debug_uart_lock.h"
 #include "FreeRTOS.h"
@@ -120,12 +123,16 @@ int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
         /* LED0 心跳按系统 tick 实时计算（1s 翻转），避免独立任务占用堆 */
         led = (uint8_t)((led & ~0x01u) |
                         ((uint8_t)((xTaskGetTickCount() / pdMS_TO_TICKS(1000)) & 1u)));
+        /* LED3(bit2) ALARM：SHT40 温度 >60℃ 现算（dso_sht40 模块缓存） */
+        led = (uint8_t)((led & ~0x04u) | (DSO_Sht40_HiAlarm() ? 0x04u : 0u));
         snprintf(reply, reply_sz,
                  "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
                  "\"cmd\":\"get_switch\",\"result\":\"ok\",\"error\":\"\","
-                 "\"data\":{\"sw\":%u,\"led\":%u}}",
+                 "\"data\":{\"sw\":%u,\"led\":%u,\"temp\":%ld,\"temp_ok\":%u}}",
                  seq, (unsigned)DSO_Switch_GetBitmap(),
-                 (unsigned)led);
+                 (unsigned)led,
+                 (long)DSO_Sht40_GetTempDezi(),
+                 (unsigned)DSO_Sht40_IsValid());
         return 1;
     }
 

@@ -200,7 +200,7 @@ OFFLINE ──connect──> HANDSHAKE ──device.status──> ONLINE
 | 现有模块 | 状态 |
 |---|---|
 | `dso_fmc_telemetry.c` | ✅ 已对齐：客户端任务推 `device.status`(1s) + `telemetry.io`/`telemetry.mode`(500ms) + `event.key`(FMC16 事件)；同一连接收 `command.execute` → 回 `command.result` |
-| `dso_switch_cmd.c` | ✅ 已暴露 `DSO_Switch_Cmd_JsonGetStr/Int` 供协议解析；`set_sw` 经 `command.execute` 执行（串口/旧 TCP 通道保留） |
+| `dso_switch_cmd.c` | ✅ 已暴露 `DSO_Switch_Cmd_JsonGetStr/Int` 供协议解析；`set_sw` 经 `command.execute` 执行（串口/旧 TCP 通道保留）。GUI `get_switch` 通道另带 `temp`（SHT40 十分之一 ℃）/`temp_ok` 字段；`led` bit2=温度>60℃ 报警（见 pc_switch_panel/README） |
 | `fmc16_integration.c` | ✅ 事件经 `DSO_FmcTelemetry_OnEvent` 推送；`fmcReady`/快照为 `telemetry.*` 数据源 |
 | 心跳/租约 | ✅ `device.status` 1s 心跳已实现；离线判定/租约拒绝由服务器侧执行（本协议定义） |
 

@@ -39,6 +39,19 @@ int BSP_I2C_UI_ReadReg(uint8_t addr7, uint8_t reg, uint8_t *val);
  */
 int BSP_I2C_UI_Probe(uint8_t addr7);
 
+/**
+ * 原始写：START + addr+W + len 字节（逐字节收 ACK）+ STOP。
+ * 用于无寄存器地址的器件（如 SHT40 命令字节）。
+ * @return 0 成功；-1 无应答 / 参数错误。
+ */
+int BSP_I2C_UI_WriteRaw(uint8_t addr7, const uint8_t *buf, uint8_t len);
+
+/**
+ * 原始读：START + addr+R + len 字节（前 len-1 字节主 ACK、最后 NACK）+ STOP。
+ * @return 0 成功；-1 无应答 / 参数错误。
+ */
+int BSP_I2C_UI_ReadRaw(uint8_t addr7, uint8_t *buf, uint8_t len);
+
 #ifdef __cplusplus
 }
 #endif
