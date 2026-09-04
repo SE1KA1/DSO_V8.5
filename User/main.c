@@ -20,6 +20,7 @@
 #include "dso/dso_eth_upload.h"
 #include "dso/dso_switch_cmd.h"
 #include "dso/dso_sht40.h"
+#include "dso/dso_ina226.h"
 #include "dso/dso_fmc_telemetry.h"
 #include "dso/fmc16/fmc16_integration.h"
 #include "ping.h"
@@ -507,6 +508,9 @@ int main(void)
 
     /* 过桥板 SHT40 温度采样任务（1s 周期，与 PCAL6524 共用 PB7/PB8 软件 I2C） */
     DSO_Sht40_Init();
+
+    /* 过桥板 INA226 电流监测任务（1s 周期，同 PB7/PB8 软件 I2C 总线） */
+    DSO_Ina226_Init();
 
     /* FMC 遥测推送：任务内部等待 LwIP netif up 后连接服务器 */
     DSO_FmcTelemetry_Init();

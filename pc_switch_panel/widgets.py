@@ -20,11 +20,11 @@ CLR_DIV = QColor(0x3A, 0x41, 0x50)
 CLR_RUN_FG = QColor(0x3F, 0xC6, 0x5B)     # green = ON
 CLR_RUN_BG = QColor(0x18, 0x28, 0x20)
 CLR_OFF_TOP = QColor(0x18, 0x28, 0x20)
-CLR_POWER = QColor(0x44, 0xAA, 0xFF)      # blue
-CLR_ALARM = QColor(0xFF, 0x50, 0x3A)      # red
+CLR_TEMP = QColor(0xFF, 0xB3, 0x00)       # yellow = temperature alarm
+CLR_ALARM = QColor(0xFF, 0x50, 0x3A)      # red = current alarm
 
-LED_ON_COLORS = (CLR_RUN_FG, CLR_POWER, CLR_ALARM)
-LED_LABELS = ("HEART", "POWER", "ALARM")
+LED_ON_COLORS = (CLR_RUN_FG, CLR_TEMP, CLR_ALARM)
+LED_LABELS = ("HEART", "TEMP", "CURRENT")
 
 
 class LedWidget(QWidget):

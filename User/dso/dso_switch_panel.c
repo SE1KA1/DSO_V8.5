@@ -9,7 +9,7 @@
  *   B11,B12,B14 → P1_1,P1_2,P1_3（U6 2B-4B）
  *   B13   → P1_4（U7 1B）
  * 开关 ON=低电平、OFF=高电平(3.3V)。mux 输出使能 G# 接 PH8（低有效，置 LOW 使能）。
- * LED 3 个：LED1=STM32心跳, LED2=电源电流正常, LED3=异常报警。
+ * LED 3 个：LED1=STM32心跳, LED2=温度报警(黄), LED3=电流报警(红)。
  *
  * 模型位图沿用 14 位（bit0=B1 … bit13=B14），bit9(B10) 恒 0；协议不变。
  */
@@ -80,8 +80,8 @@ void DSO_Switch_Init(void)
 
     s_sw_bitmap = 0;
     s_led[0] = 1;  /* 心跳默认亮 */
-    s_led[1] = 1;  /* 电源默认正常 */
-    s_led[2] = 0;  /* 无报警 */
+    s_led[1] = 0;  /* 温度报警默认灭（应答时按 SHT40 现算） */
+    s_led[2] = 0;  /* 电流报警默认灭（应答时按 INA226 现算） */
 
     switch_phy_enable();
 

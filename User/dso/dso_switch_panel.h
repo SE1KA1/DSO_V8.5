@@ -36,10 +36,10 @@ void DSO_Switch_Set(int idx, uint8_t on);
 /** 14 位开关 bitmap：bit0=SW1 ... bit13=SW14。 */
 uint16_t DSO_Switch_GetBitmap(void);
 
-/** 3 位 LED bitmap：bit0=LED1(心跳) bit1=LED2(电源) bit2=LED3(报警)。 */
+/** 3 位 LED bitmap：bit0=LED1(心跳) bit1=LED2(温度报警) bit2=LED3(电流报警)。 */
 uint8_t DSO_Switch_GetLedBitmap(void);
 
-/** 读 LED (0..2): 0=灭 1=亮。LED1=心跳 LED2=电源 LED3=报警。 */
+/** 读 LED (0..2): 0=灭 1=亮。LED1=心跳 LED2=温度报警 LED3=电流报警。 */
 uint8_t DSO_Switch_GetLed(int led);
 
 /** 设置 LED 状态。 */

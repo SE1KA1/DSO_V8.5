@@ -87,11 +87,15 @@ class DSOSimulator:
 
         # switch panel model (mirror dso_switch_panel.c)
         self.sw_bits = 0          # 14-bit bitmap, bit0=SW1 .. bit13=SW14
-        self.led_bits = 0b011     # LED1 heartbeat + LED2 power on
+        self.led_bits = 0b001     # LED1 heartbeat; LED2(temp)/LED3(current) alarms off
         # SHT40 temperature (tenths of a degree) — alarm threshold mirrors
         # dso_sht40.h DSO_SHT40_ALARM_HI_CENTI=6000 → 600 dezi
         self.temp_dezi = 250      # 25.0 °C
         self.temp_ok = 1
+        # INA226 current (mA) — over-current clears LED2 (bit1), mirrors
+        # dso_ina226.h: Rshunt 100mΩ, alert 600 LSB ≈ 15mA
+        self.current_ma = 6       # normal ≈5-8 mA
+        self.current_ok = 1
 
         # status / telemetry
         self.running = True
@@ -261,7 +265,7 @@ class DSOSimulator:
                     ack.result = "error"
                     ack.error = "bad_sw"
             elif cmd == "set_temp":
-                # 离线演示：temp 为十分之一 ℃，>600(60.0℃) 置 LED3 ALARM（镜像 dso_sht40）
+                # 离线演示：temp 十分之一℃ >600(60.0℃) 置 LED2 TEMP(bit1)（镜像 dso_sht40）
                 try:
                     t = int(params.get("temp"))
                 except (TypeError, ValueError):
@@ -270,10 +274,22 @@ class DSOSimulator:
                 else:
                     self.temp_dezi = t
                     self.temp_ok = 1
-                    self.led_bits = (self.led_bits & ~0x04) | (0x04 if t > 600 else 0)
+                    self.led_bits = (self.led_bits & ~0x02) | (0x02 if t > 600 else 0)
+            elif cmd == "set_cur":
+                # 离线演示：current 为 mA，>15 置 LED3 CURRENT(bit2)（镜像 dso_ina226）
+                try:
+                    c = int(params.get("ma"))
+                except (TypeError, ValueError):
+                    ack.result = "error"
+                    ack.error = "bad_ma"
+                else:
+                    self.current_ma = c
+                    self.current_ok = 1 if c <= 15 else 0
+                    self.led_bits = (self.led_bits & ~0x04) | (0x04 if c > 15 else 0)
             elif cmd == "get_switch":
                 ack.data = {"sw": self.sw_bits, "led": self.led_bits,
-                            "temp": self.temp_dezi, "temp_ok": self.temp_ok}
+                            "temp": self.temp_dezi, "temp_ok": self.temp_ok,
+                            "cur_ma": self.current_ma}
             elif cmd == "get_config":
                 pass  # no-op, config is exposed via read_frame()
             elif cmd == "reboot":

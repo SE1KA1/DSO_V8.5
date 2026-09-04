@@ -714,6 +714,11 @@
               <FileType>1</FileType>
               <FilePath>..\..\User\dso\dso_sht40.c</FilePath>
             </File>
+            <File>
+              <FileName>dso_ina226.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_ina226.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

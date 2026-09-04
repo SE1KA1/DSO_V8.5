@@ -257,7 +257,7 @@ class MainWindow(QMainWindow):
             self._sw_bits = sw
             self._led_bits = led
             self._apply()
-        self._set_temp_display(temp_dezi, temp_ok, alarm=bool((led >> 2) & 1))
+        self._set_temp_display(temp_dezi, temp_ok, alarm=bool((led >> 1) & 1))
         self._set_status("online")
 
     def _set_temp_display(self, temp_dezi: int | None, temp_ok: int,
