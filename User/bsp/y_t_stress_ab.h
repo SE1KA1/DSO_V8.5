@@ -116,11 +116,11 @@
 #endif
 
 /* 1 = 不创建 MainTask（emWin GUI 任务）。
- * ETH 吞吐测试模式：GUI_Init 卡死（云桥/FMC 冲突，LCD 空白）且以太网高负载时
- * 会走到 NULL 设备 API → HardFault。以太网路径不依赖 GUI，禁用后可稳定跑吞吐测试。
- * 测完恢复 0。 */
+ * GUI_Init 卡死（云桥/FMC 冲突，LCD 空白）：MainTask 栈占 14336 words(≈57KB)，
+ * 会挤爆 FreeRTOS 堆致 MX_LWIP_Init 的 tcpip 线程分配失败（link 灯不亮）。
+ * PC 开关面板 GUI 不依赖 LCD 侧任务；故保持 1。 */
 #ifndef Y_T_AB_DISABLE_GUI_TASK
-#define Y_T_AB_DISABLE_GUI_TASK  0
+#define Y_T_AB_DISABLE_GUI_TASK  1
 #endif
 
 /* 1 = keep DSOEng alive but prevent ADC/DMA acquisition from starting.

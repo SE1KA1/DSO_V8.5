@@ -13,9 +13,12 @@ DSO's IP for real hardware.
 
 from __future__ import annotations
 
+import json
 import sys
+import time
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication, QComboBox, QGridLayout, QHBoxLayout,
                                QLabel, QLineEdit, QMainWindow, QPlainTextEdit,
                                QPushButton, QStatusBar, QVBoxLayout, QWidget)
@@ -31,7 +34,7 @@ DEFAULT_PORT = 5005
 DIP10_INDICES = list(range(9))      # B1..B9 → 模型 idx 0-8
 DIP4_INDICES = [10, 11, 12, 13]     # B11..B14 → 模型 idx 10-13
 ALL_INDICES = DIP10_INDICES + DIP4_INDICES
-LED_COUNT = 3
+LED_COUNT = 5   # HEART/TEMP/CURRENT + ETH/USB 状态
 POLL_MS = 500
 
 
@@ -47,11 +50,24 @@ class MainWindow(QMainWindow):
         self._leds: list[LedWidget] = []
         self._sws: list[SwitchWidget] = []
 
+        # set_sw round-trip latency measurement (per click → SERIAL LOG)
+        self._lat_seq: int | None = None     # seq awaiting its set_sw ack
+        self._lat_t0 = 0.0
+        self._lat_idx = -1
+        self._lat_on = 0
+        self._lat_link = "?"
+        self._lat_win: list[float] = []      # last up-to-10 latencies (ms)
+        self._lat_win_link: str | None = None
+
         self._build_ui()
 
         self._poll = QTimer(self)
         self._poll.setInterval(POLL_MS)
         self._poll.timeout.connect(self._poll_state)
+
+        self._ack_timer = QTimer(self)
+        self._ack_timer.setInterval(4)
+        self._ack_timer.timeout.connect(self._drain_acks)
 
     # ---- UI ---------------------------------------------------------------
 
@@ -159,6 +175,20 @@ class MainWindow(QMainWindow):
             row.addWidget(num)
             row.addStretch(1)
             right.addLayout(row)
+
+        # MUTE：蜂鸣器静音滑块（非绿渐变色区分；左滑=静音，LED 闪烁不受影响）
+        mrow = QHBoxLayout()
+        self._mute = SwitchWidget(99, label="MUTE",
+                                  accent=(QColor(0xFF, 0xB3, 0x4D),
+                                          QColor(0xC2, 0x45, 0x1C)))
+        self._mute.swiped.connect(self._on_mute_swipe)
+        mrow.addWidget(self._mute)
+        mrow.addSpacing(6)
+        mlabel = QLabel("MUTE")
+        mlabel.setStyleSheet("color: #888;")
+        mrow.addWidget(mlabel)
+        mrow.addStretch(1)
+        right.addLayout(mrow)
         right.addStretch(1)
 
         # 串口原始输出日志面板（显示收到的所有行，含 [SER]/[BOOT] 等调试信息）
@@ -228,9 +258,21 @@ class MainWindow(QMainWindow):
     def _on_disconnect(self) -> None:
         self._transport.close()
         self._poll.stop()
+        self._ack_timer.stop()
+        self._lat_seq = None
+        self._lat_win.clear()
         self._btn_conn.setEnabled(True)
         self._btn_disc.setEnabled(False)
         self._set_status("disconnected")
+
+    def _on_mute_swipe(self, idx: int, on: int) -> None:
+        """MUTE 滑块：左滑=on=静音。发 set_buzzer，状态由轮询收敛。"""
+        if not self._transport.is_open:
+            return
+        mute = 1 if on else 0
+        self._seq += 1
+        self._append_log(f"> set_buzzer on={mute}")
+        self._transport.send_cmd("set_buzzer", {"on": mute}, self._seq)
 
     def _on_swipe(self, idx: int, on: int) -> None:
         """SwitchWidget swipe result: LEFT=ON(1) / RIGHT=OFF(0), absolute set."""
@@ -240,6 +282,14 @@ class MainWindow(QMainWindow):
         self._seq += 1
         self._append_log(f"> set_sw sw={idx} on={desired}")
         self._transport.send_cmd("set_sw", {"sw": idx, "on": desired}, self._seq)
+        # 记录发送时刻：同一 seq 的 set_sw ack 回来即结算往返延迟
+        self._lat_seq = self._seq
+        self._lat_t0 = time.monotonic()
+        self._lat_idx = idx
+        self._lat_on = desired
+        self._lat_link = self._link.currentText()
+        if not self._ack_timer.isActive():
+            self._ack_timer.start()
         # optimistic local update; the poll reconciles with the device
         if desired:
             self._sw_bits |= 1 << idx
@@ -248,17 +298,76 @@ class MainWindow(QMainWindow):
         self._apply()
 
     def _poll_state(self) -> None:
-        st = self._transport.query_state(timeout=0.4, on_line=self._append_log)
+        st = self._transport.query_state(timeout=0.4, on_line=self._append_log,
+                                         on_ack=self._on_ack)
         if st is None:
             self._set_status("no reply — check link")
             return
-        sw, led, temp_dezi, temp_ok = st
-        if sw != self._sw_bits or led != self._led_bits:
+        sw, led, temp_dezi, temp_ok, eth_link, usb_active, buzzer_mute = st
+        # 折叠 ETH(bit3)/USB(bit4) 状态位，与设备 led bit0-2 一起驱动 5 个 LED
+        combined = led | ((1 if eth_link else 0) << 3) | ((1 if usb_active else 0) << 4)
+        if sw != self._sw_bits or combined != self._led_bits:
             self._sw_bits = sw
-            self._led_bits = led
+            self._led_bits = combined
             self._apply()
+        # MUTE 与设备静音状态同步（设备为准，覆盖本地点按）
+        if self._mute._on != bool(buzzer_mute):
+            self._mute.set_on(bool(buzzer_mute))
         self._set_temp_display(temp_dezi, temp_ok, alarm=bool((led >> 1) & 1))
         self._set_status("online")
+
+    # ---- set_sw 往返延迟：每次打 SERIAL LOG，每 10 次 avg/min/max -------------
+
+    def _on_ack(self, obj: dict) -> None:
+        """背罜：set_sw ack 被 poll 的 query_state 消费时也结算（防漏测）。"""
+        if (self._lat_seq is not None
+                and obj.get("cmd") == "set_sw"
+                and obj.get("seq") == self._lat_seq):
+            self._finalize_latency()
+
+    def _drain_acks(self) -> None:
+        """4ms 定时非阻塞排空 rx，尽快抓到 set_sw ack（不冻结 UI）。"""
+        if self._lat_seq is None:
+            self._ack_timer.stop()
+            return
+        while self._lat_seq is not None:
+            line = self._transport.next_line(timeout=0)
+            if line is None:
+                break
+            self._append_log(line)               # 顺带保留原始行
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (obj.get("type") == "ack" and obj.get("cmd") == "set_sw"
+                    and obj.get("seq") == self._lat_seq):
+                self._finalize_latency()
+                return
+        if time.monotonic() > self._lat_t0 + 2.0:
+            self._append_log(f"[LAT] set_sw B{self._lat_idx + 1} "
+                             f"on={self._lat_on} → timeout ({self._lat_link})")
+            self._lat_seq = None
+            self._ack_timer.stop()
+
+    def _finalize_latency(self) -> None:
+        if self._lat_seq is None:
+            return
+        dt_ms = (time.monotonic() - self._lat_t0) * 1000.0
+        self._append_log(f"[LAT] set_sw B{self._lat_idx + 1} on={self._lat_on} "
+                         f"→ {dt_ms:.1f} ms ({self._lat_link})")
+        # 通道切换时清窗，避免混统计
+        if getattr(self, "_lat_win_link", None) != self._lat_link:
+            self._lat_win.clear()
+            self._lat_win_link = self._lat_link
+        self._lat_win.append(dt_ms)
+        if len(self._lat_win) >= 10:
+            avg = sum(self._lat_win) / len(self._lat_win)
+            lo, hi = min(self._lat_win), max(self._lat_win)
+            self._append_log(f"[LAT] last10 avg={avg:.1f} min={lo:.1f} "
+                             f"max={hi:.1f} ms ({self._lat_link})")
+            self._lat_win.clear()
+        self._lat_seq = None
+        self._ack_timer.stop()
 
     def _set_temp_display(self, temp_dezi: int | None, temp_ok: int,
                           alarm: bool) -> None:

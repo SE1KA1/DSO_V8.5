@@ -131,3 +131,20 @@ uint8_t DSO_Sht40_HiAlarm(void)
 {
     return (s_valid != 0u && s_temp_centi > (int32_t)DSO_SHT40_ALARM_HI_CENTI) ? 1u : 0u;
 }
+
+uint8_t DSO_Sht40_GetLevel(void)
+{
+    if (s_valid == 0u) {
+        return 0u;
+    }
+    if (s_temp_centi > (int32_t)DSO_SHT40_EMERG_CENTI) {
+        return 3u;
+    }
+    if (s_temp_centi > (int32_t)DSO_SHT40_ALARM_HI_CENTI) {
+        return 2u;
+    }
+    if (s_temp_centi > (int32_t)DSO_SHT40_WARN_CENTI) {
+        return 1u;
+    }
+    return 0u;
+}

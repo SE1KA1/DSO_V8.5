@@ -4,11 +4,13 @@
  *
  * 配置（首次成功后不再重复写）：
  *   Config 0x0527   AVG=16、VBUSCT/VSHCT=1.1ms、连续 shunt+bus；AlertPol=0(开漏低有效)
- *   Alert Limit     0x0258（600 LSB = 1.5mV ≈ 15mA）
- *   Mask/Enable     0x8000（SOL=1：shunt 过压告警源，锁存）
- * 过流时 ALERT 引脚拉低并锁存；每周期读 Mask/Enable 清锁存使能重新武装。
+ *   Alert Limit     DSO_INA226_ALERT_LSB（告警线 1400 LSB = 3.5mV ≈ 35mA）
+ *   Mask/Enable     0x8001（SOL=1 + LEN 锁存）
+ * 过流时 ALERT 引脚拉低并锁存；非引擎响铃窗口每周期读 Mask/Enable 清锁存
+ * 使能重新武装（引擎响铃窗口跳过 M/E，见 ina226_measure_once）。
  *
- * 判警（迟滞）：shunt LSB > 600 → 过流(power_ok=0)；降到 ≤450 才恢复(1)。
+ * 判警（迟滞，分级纯分流）：shunt LSB > ALERT → 过流(power_ok=0)；
+ * 降到 ≤ RESTORE(=ALERT×4/5) 并连续 3 周期才恢复(1)。
  * 总线互斥持锁完成 shunt+M/E 两次读；读失败保留上次判定（默认视为正常）。
  */
 #include "dso_ina226.h"
@@ -23,7 +25,9 @@
 
 static volatile int32_t s_shunt_lsb = 0;   /* 最近分流原始值（有符号 LSB） */
 static volatile uint8_t s_power_ok = 1;    /* 默认正常（LED2 亮） */
+static volatile uint8_t s_level = 0;       /* 分级：0正常 1预警 2告警 3紧急 */
 static volatile uint8_t s_have_data = 0;   /* 曾读到过有效样本 */
+static volatile uint8_t s_alert_override = 0; /* 蜂鸣节奏引擎强制响铃中(限值被压低) */
 static uint8_t s_configured = 0;
 static uint16_t s_fail_streak = 0;
 static uint8_t s_normal_count = 0;         /* 连续正常周期（软件锁存恢复计数） */
@@ -80,9 +84,13 @@ static void ina226_measure_once(void)
         printf("[INA226] configured\r\n");
     }
 
-    /* 先读 Mask/Enable：捕获 AFF(bit9) 告警标志；读本身会清芯片锁存（重新武装） */
+    /* 先读 Mask/Enable：捕获 AFF(bit4) 告警标志；读本身会清芯片锁存（重新武装）。
+     * 蜂鸣节奏引擎强制响铃期间（s_alert_override，限值被压到 200 LSB）跳过
+     * M/E 读：该 AFF 只是引擎故意触发、不代表真实过流；且读会清锁存打断响窗口。 */
     BSP_I2C_UI_Lock();
-    rc = ina226_rreg16(DSO_INA226_REG_MASK_EN, &me);
+    if (s_alert_override == 0u) {
+        rc = ina226_rreg16(DSO_INA226_REG_MASK_EN, &me);
+    }
     if (rc == 0) {
         rc = ina226_rreg16(DSO_INA226_REG_SHUNT, &shunt_raw);
     }
@@ -91,13 +99,24 @@ static void ina226_measure_once(void)
 
     lsb = (int32_t)(int16_t)shunt_raw;   /* 有符号分流值 */
     /* M/E 读回：bit15=SOL 使能, bit4=AFF(告警标志,含锁存事件), bit3=CVRF(转换完成,恒置), bit1=APOL */
-    aff = (me & 0x0010u) ? 1u : 0u;
+    aff = ((me & 0x0010u) != 0u && s_alert_override == 0u) ? 1u : 0u;
     s_shunt_lsb = lsb;
     s_have_data = 1u;
     s_fail_streak = 0u;
 
-    /* 判警：芯片 AFF（含瞬态锁存）或 分流超限；恢复需连续 3 周期正常（软件锁存防抖） */
+    /* 分级判警（纯分流阈值，四级）；AFF 只作"曾触发"参考不强制等级
+     * （芯片锁存可能残留，真实等级一律按当前分流值定）。
+     * 恢复需连续 3 周期正常（软件锁存防抖）。 */
     alarm = (aff != 0u) || (lsb > (int32_t)DSO_INA226_ALERT_LSB);
+    if (lsb > (int32_t)DSO_INA226_EMERG_LSB) {
+        s_level = 3u;
+    } else if (lsb > (int32_t)DSO_INA226_ALERT_LSB) {
+        s_level = 2u;
+    } else if (lsb > (int32_t)DSO_INA226_WARN_LSB) {
+        s_level = 1u;
+    } else {
+        s_level = 0u;
+    }
     if (alarm) {
         s_power_ok = 0u;
         s_normal_count = 0u;
@@ -120,9 +139,6 @@ static void ina226_measure_once(void)
         s_reported_over = 0u;
         printf("[INA226] current normal again\r\n");
     }
-    /* 诊断：每周期一行（bring-up 后移除） */
-    printf("[INA226] shunt=%ld LSB me=0x%04X cur=%ldmA ok=%u\r\n",
-           (long)lsb, (unsigned)me, (long)(lsb / 40), (unsigned)s_power_ok);
     return;
 
 fail:
@@ -166,4 +182,27 @@ int32_t DSO_Ina226_GetCurMa(void)
 {
     if (!s_have_data) return 0;
     return s_shunt_lsb / 40;   /* lsb*0.025 mA；Rshunt 固定 100mΩ */
+}
+
+uint8_t DSO_Ina226_GetLevel(void)
+{
+    return s_level;
+}
+
+void DSO_Ina226_SetAlertLimit(uint16_t lsb)
+{
+    BSP_I2C_UI_Lock();
+    /* 非 0x7FFF = 蜂鸣节奏引擎压低限值强制触发（响窗口）→ 采样任务跳过
+     * M/E（防误判过流 + 防清锁存打断响窗口）；0x7FFF = 抑制（停窗口） */
+    s_alert_override = (lsb >= 0x7FFFu) ? 0u : 1u;
+    (void)ina226_wreg16(DSO_INA226_REG_ALERT_LIMIT, lsb);
+    BSP_I2C_UI_Unlock();
+}
+
+void DSO_Ina226_ClearAlertLatch(void)
+{
+    uint16_t me = 0;
+    BSP_I2C_UI_Lock();
+    (void)ina226_rreg16(DSO_INA226_REG_MASK_EN, &me);   /* 读即清锁存 */
+    BSP_I2C_UI_Unlock();
 }

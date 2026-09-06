@@ -20,6 +20,13 @@ extern "C" {
 void DSO_FmcTelemetry_Init(void);
 
 /**
+ * 经同一遥测 TCP 连接原样发送一行 JSON（自动补 CRLF）。
+ * 供 module_telemetry 各模块帧（spec-00 信封）复用连接。
+ * @return 0 已发出；-1 未连接/参数错。
+ */
+int DSO_FmcTelemetry_SendRaw(const char *line);
+
+/**
  * 事件回调：由 FMC16_Service_Task 在收到 XO2 EVENT 包时调用，即时推送事件帧。
  * @param code  事件码（FMC16_EVENT_MASK_* 对应位）
  * @param ts    XO2 事件时间戳（ms）

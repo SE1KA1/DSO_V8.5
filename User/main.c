@@ -21,6 +21,10 @@
 #include "dso/dso_switch_cmd.h"
 #include "dso/dso_sht40.h"
 #include "dso/dso_ina226.h"
+#include "dso/dso_ina226_u44.h"
+#include "dso/dso_atecc608b.h"
+#include "dso/dso_module_upload.h"
+#include "dso/dso_watchdog.h"
 #include "dso/dso_fmc_telemetry.h"
 #include "dso/fmc16/fmc16_integration.h"
 #include "ping.h"
@@ -511,6 +515,18 @@ int main(void)
 
     /* 过桥板 INA226 电流监测任务（1s 周期，同 PB7/PB8 软件 I2C 总线） */
     DSO_Ina226_Init();
+
+    /* 核心板 U44-INA226 电流监测任务（0x40/20mΩ，同总线） */
+    DSO_Ina226U44_Init();
+
+    /* 密码芯片 ATECC608B：一次性上电探测（识别/序列号/锁状态打印） */
+    DSO_Atecc608b_Init();
+
+    /* module_telemetry 模块数据上报（sht40 / ina226_u10，spec-00 信封走遥测 TCP） */
+    DSO_ModuleUpload_Init();
+
+    /* SP706T 看门狗：PB9 喂狗 + PFO# 读 + 复位原因上报 */
+    DSO_Watchdog_Init();
 
     /* FMC 遥测推送：任务内部等待 LwIP netif up 后连接服务器 */
     DSO_FmcTelemetry_Init();

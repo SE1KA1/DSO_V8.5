@@ -27,6 +27,12 @@ int BSP_PCAL6524_Init(void);
  */
 int BSP_PCAL6524_WriteP0P1(uint16_t bits);
 
+/**
+ * 写 P2_0..P2_4（YDS1..YDS5 硬件 LED，低电平点亮）。
+ * @param on_mask 5 位点亮掩码（bit_i=1 → YDS(i+1) 亮）；内部取反后写 OUT2。
+ */
+int BSP_PCAL6524_WriteP2Leds(uint8_t on_mask);
+
 #ifdef __cplusplus
 }
 #endif

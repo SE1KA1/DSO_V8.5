@@ -29,6 +29,12 @@ extern "C" {
 /** 高温报警阈值（百分之一 ℃）�?6000 = 60.00 ℃。温度严格大于此值报警�? */
 #define DSO_SHT40_ALARM_HI_CENTI    6000
 
+/** 温度预警阈值：58.00℃（上限-2℃，声光联动文档语义） */
+#define DSO_SHT40_WARN_CENTI        5800
+
+/** 温度紧急阈值：65.00℃（上限+5℃，文档"超限5℃以上=高危"） */
+#define DSO_SHT40_EMERG_CENTI       6500
+
 /** 连续失败超过该次数标记无效（temp_ok=0），此后每次成功自动恢复 */
 #define DSO_SHT40_FAIL_INVALID_N    10u
 
@@ -51,6 +57,13 @@ uint8_t DSO_Sht40_IsValid(void);
  * 高温报警：有效且温度 > DSO_SHT40_ALARM_HI_CENTI。返�? 1=报警�?
  */
 uint8_t DSO_Sht40_HiAlarm(void);
+
+/**
+ * 温度告警等级（声光联动四级）：
+ *   0=正常(≤58℃) 1=预警(>58℃) 2=超限(>60℃) 3=紧急(>65℃)
+ * 传感器无效时返回 0（避免误报）。
+ */
+uint8_t DSO_Sht40_GetLevel(void);
 
 #ifdef __cplusplus
 }

@@ -23,6 +23,9 @@
 #define PCAL6524_REG_CFG0  0x0Cu
 /* 宏定义: PCAL6524_REG_CFG1 - P1 方向寄存器（0=输出）。 */
 #define PCAL6524_REG_CFG1  0x0Du
+/* P2 输出/方向（YDS1-5 LED，低电平点亮；地址按 PCAL6524 手册 0x06/0x0E，真机核对） */
+#define PCAL6524_REG_OUT2  0x06u
+#define PCAL6524_REG_CFG2  0x0Eu
 /* 宏定义: PCAL6524_REG_ODC - 输出端口配置（0=推挽，1=开漏；三组端口全局）。 */
 #define PCAL6524_REG_ODC   0x5Cu
 
@@ -33,11 +36,13 @@ int BSP_PCAL6524_Init(void)
     BSP_I2C_UI_Init();
 
     BSP_I2C_UI_Lock();
-    /* 先写输出（全 OFF=1）再设方向为输出，避免上电毛刺 */
+    /* 先写输出（全 OFF=1；P2 LED 灭=1）再设方向为输出，避免上电毛刺 */
     rc  = BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_OUT0, 0xFFu);
     rc |= BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_OUT1, 0xFFu);
+    rc |= BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_OUT2, 0xFFu);
     rc |= BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_CFG0, 0x00u);
     rc |= BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_CFG1, 0x00u);
+    rc |= BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_CFG2, 0x00u);
     /* 输出端口配置 0x5C = 0x00 → 三组端口全部推挽驱动（0=推挽，1=开漏） */
     rc |= BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_ODC, 0x00u);
     /* 驱动强度 0x40-0x43 = 0xFF → Port 0/1 驱动强度最大（1x），避免弱驱动拉不动 mux 负载 */
@@ -59,6 +64,18 @@ int BSP_PCAL6524_WriteP0P1(uint16_t bits)
                               (uint8_t)(bits & 0xFFu));
     rc |= BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_OUT1,
                               (uint8_t)((bits >> 8) & 0xFFu));
+    BSP_I2C_UI_Unlock();
+
+    return rc;
+}
+
+int BSP_PCAL6524_WriteP2Leds(uint8_t on_mask)
+{
+    int rc;
+
+    BSP_I2C_UI_Lock();
+    rc = BSP_I2C_UI_WriteReg(PCAL6524_I2C_ADDR7, PCAL6524_REG_OUT2,
+                             (uint8_t)(~(on_mask & 0x1Fu)));
     BSP_I2C_UI_Unlock();
 
     return rc;

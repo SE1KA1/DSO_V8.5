@@ -26,10 +26,11 @@
 #define UI_SDA_READ()  (((I2C_UI_GPIO->IDR) & I2C_UI_SDA_PIN) != 0U)
 
 static SemaphoreHandle_t s_i2c_ui_mtx;
+static volatile uint32_t s_bit_delay_us = 0u;   /* 0=默认 2µs；诊断可临时调慢 */
 
 static void i2c_delay(void)
 {
-    bsp_DelayUS(2);
+    bsp_DelayUS((s_bit_delay_us != 0u) ? s_bit_delay_us : 2u);
 }
 
 static void i2c_stop(void)
@@ -148,6 +149,13 @@ void BSP_I2C_UI_Init(void)
     }
 }
 
+/* 诊断：设置总线位延迟 µs（0=恢复默认 2µs ≈ 200kHz）。慢速(如 30µs ≈ 10kHz)
+ * 用于排除"主控采样过早把器件慢 ACK 误判 NACK"。影响全总线，用完必须设回 0。 */
+void BSP_I2C_UI_SetBitDelayUs(uint32_t us)
+{
+    s_bit_delay_us = us;
+}
+
 void BSP_I2C_UI_Lock(void)
 {
     if (s_i2c_ui_mtx != NULL &&
@@ -162,6 +170,52 @@ void BSP_I2C_UI_Unlock(void)
         xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
         (void)xSemaphoreGive(s_i2c_ui_mtx);
     }
+}
+
+/* ---- 唤醒脉冲（ATECC608B 等：睡眠中地址 NACK，需 SDA 拉低唤醒） ---- */
+
+void BSP_I2C_UI_WakePulseUs(uint32_t low_us)
+{
+    /* SDA 拉低 low_us µs（开漏驱动低）→ 释放由上拉复位；SCL 不动。
+     * tWLO≥60µs；随后 ~2ms（tWHI≥1.5ms），自检使能时由调用方再加 20ms 余量。 */
+    if (low_us < 60u) {
+        low_us = 60u;
+    }
+    if (low_us > 20000u) {
+        low_us = 20000u;
+    }
+    UI_SDA_0();
+    bsp_DelayUS(low_us);
+    UI_SDA_1();
+    bsp_DelayUS(2000);
+}
+
+void BSP_I2C_UI_WakePulse(void)
+{
+    BSP_I2C_UI_WakePulseUs(100u);
+}
+
+/* 诊断：持续拉低 SDA 约 ms 毫秒（阻塞）。用于万用表实测芯片 SDA 脚电平。 */
+void BSP_I2C_UI_SdaLowMs(uint32_t ms)
+{
+    uint32_t i;
+    UI_SDA_0();
+    for (i = 0u; i < ms; i++) {
+        bsp_DelayUS(1000);
+    }
+    UI_SDA_1();
+}
+
+/* 自检：驱动 SDA 低并回读 IDR。@return 1=确实读到低（引脚在驱动）；0=读仍高（配置/接线问题） */
+int BSP_I2C_UI_SdaLowProbe(void)
+{
+    int v;
+    UI_SDA_0();
+    bsp_DelayUS(120);
+    v = (UI_SDA_READ() != 0u) ? 0 : 1;
+    UI_SDA_1();
+    bsp_DelayUS(10);
+    return v;
 }
 
 /* ---- 寄存器访问 ---- */
@@ -256,6 +310,31 @@ int BSP_I2C_UI_WriteRaw(uint8_t addr7, const uint8_t *buf, uint8_t len)
                 break;
             }
         }
+    }
+    i2c_stop();
+    return rc;
+}
+
+int BSP_I2C_UI_DiagTxBytes(uint8_t addr7, const uint8_t *buf, uint8_t len,
+                           uint8_t *ack_log)
+{
+    int rc = 0;
+    uint8_t i;
+
+    if (buf == NULL || len == 0u || ack_log == NULL) {
+        return -1;
+    }
+
+    i2c_start();
+    i2c_send_byte((uint8_t)((addr7 << 1) | I2C_UI_WR));
+    if (i2c_wait_ack() != 0U) {
+        rc = -1;
+    }
+    ack_log[0] = (rc == 0) ? 1u : 0u;
+    /* 无论地址是否 ACK 都继续发（NACK 后总线仍可继续，诊断不中断） */
+    for (i = 0u; i < len; i++) {
+        i2c_send_byte(buf[i]);
+        ack_log[1u + i] = (i2c_wait_ack() == 0U) ? 1u : 0u;
     }
     i2c_stop();
     return rc;

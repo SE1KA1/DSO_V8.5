@@ -33,7 +33,7 @@ class _Handler(socketserver.StreamRequestHandler):
                     self.wfile.write((ack.to_json() + "\r\n").encode("utf-8"))
                     self.wfile.flush()
                 except Exception as e:  # noqa: BLE001 - keep server alive on bad frame
-                    resp = '{"ver":"0.9","type":"ack","result":"error","error":"%s"}\r\n'
+                    |
                     self.wfile.write((resp % str(e)).encode("utf-8"))
                     self.wfile.flush()
         finally:

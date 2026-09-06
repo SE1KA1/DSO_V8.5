@@ -22,9 +22,11 @@ CLR_RUN_BG = QColor(0x18, 0x28, 0x20)
 CLR_OFF_TOP = QColor(0x18, 0x28, 0x20)
 CLR_TEMP = QColor(0xFF, 0xB3, 0x00)       # yellow = temperature alarm
 CLR_ALARM = QColor(0xFF, 0x50, 0x3A)      # red = current alarm
+CLR_ETH = QColor(0x44, 0xAA, 0xFF)        # blue = ethernet link
+CLR_USB = QColor(0x26, 0xC6, 0xDA)        # cyan = usb activity
 
-LED_ON_COLORS = (CLR_RUN_FG, CLR_TEMP, CLR_ALARM)
-LED_LABELS = ("HEART", "TEMP", "CURRENT")
+LED_ON_COLORS = (CLR_RUN_FG, CLR_TEMP, CLR_ALARM, CLR_ETH, CLR_USB)
+LED_LABELS = ("HEART", "TEMP", "CURRENT", "ETH", "USB")
 
 
 class LedWidget(QWidget):
@@ -78,10 +80,14 @@ class SwitchWidget(QWidget):
 
     SWIPE_THRESHOLD = 16               # horizontal px needed to trigger
 
-    def __init__(self, index: int, label: str | None = None, parent=None) -> None:
+    def __init__(self, index: int, label: str | None = None, parent=None,
+                 accent: tuple[QColor, QColor] | None = None) -> None:
         super().__init__(parent)
         self._index = index
         self._label = label if label is not None else f"SW{index + 1}"
+        # ON 渐变色：默认绿（拨码开关）；accent 供 MUTE 等非绿控件区分
+        self._acc = accent if accent is not None else \
+            (QColor(0x52, 0xD6, 0x6C), QColor(0x2A, 0x8F, 0x42))
         self._on = False
         self._press = None             # press position (QPointF) while dragging
         self._preview = None           # None | bool target state during drag
@@ -160,8 +166,8 @@ class SwitchWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         if on:
             track = QLinearGradient(0, card.top(), 0, card.bottom())
-            track.setColorAt(0.0, QColor(0x52, 0xD6, 0x6C))
-            track.setColorAt(1.0, QColor(0x2A, 0x8F, 0x42))
+            track.setColorAt(0.0, self._acc[0])
+            track.setColorAt(1.0, self._acc[1])
             p.setBrush(track)
         else:
             p.setBrush(CLR_OFF_TOP)

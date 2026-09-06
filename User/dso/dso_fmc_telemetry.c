@@ -94,6 +94,21 @@ static void tel_send_line(const char *line)
     (void)lwip_send(s_fd, "\r\n", 2, 0);
 }
 
+int DSO_FmcTelemetry_SendRaw(const char *line)
+{
+    if (line == NULL) {
+        return -1;
+    }
+    tel_lock();
+    if (s_fd < 0) {
+        tel_unlock();
+        return -1;
+    }
+    tel_send_line(line);
+    tel_unlock();
+    return 0;
+}
+
 /* 通用信封帧发送 */
 static void tel_send_frame(const char *mt, const char *cmd_id, const char *payload)
 {

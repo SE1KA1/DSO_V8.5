@@ -120,13 +120,15 @@ class SwitchTransport:
         return item
 
     def query_state(self, timeout: float = 1.0,
-                    on_line=None) -> tuple[int, int, int | None, int] | None:
+                    on_line=None, on_ack=None) -> tuple[int, int, int | None, int, int, int, int] | None:
         """Send get_switch; return (sw, led, temp_dezi, temp_ok). None on no reply.
 
         ``temp_dezi`` is the SHT40 temperature in tenths of a degree (245 = 24.5°C),
         or None when the device/firmware omits it. Skips any interleaved lines that
         are not the get_switch ack (e.g. stale set_sw acks), so the caller can poll
-        freely. Every line read is passed to ``on_line(line)`` if provided.
+        freely. Every line read is passed to ``on_line(line)``; every parsed ack is
+        passed to ``on_ack(obj)`` (latency backstop when a set_sw ack is drained by
+        this poll instead of the dedicated watcher).
         """
         self.send_cmd("get_switch")
         deadline = time.monotonic() + timeout
@@ -143,6 +145,8 @@ class SwitchTransport:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if obj.get("type") == "ack" and on_ack is not None:
+                on_ack(obj)
             if (obj.get("type") == "ack"
                     and obj.get("cmd") == "get_switch"
                     and obj.get("result") == "ok"):
@@ -153,7 +157,10 @@ class SwitchTransport:
                     raw = data.get("temp")
                     temp_dezi = int(raw) if raw is not None else None
                     temp_ok = int(data.get("temp_ok", 0))
+                    eth_link = int(data.get("eth_link", 0))
+                    usb_active = int(data.get("usb_active", 0))
+                    buzzer_mute = int(data.get("buzzer_mute", 0))
                 except (TypeError, ValueError):
                     continue
-                return sw, led, temp_dezi, temp_ok
+                return sw, led, temp_dezi, temp_ok, eth_link, usb_active, buzzer_mute
             # not our ack — keep reading

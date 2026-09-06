@@ -20,12 +20,18 @@
 #include "dso_switch_panel.h"
 #include "dso_sht40.h"
 #include "dso_ina226.h"
+#include "dso_ina226_u44.h"
 #include "bsp.h"              /* stm32h7xx_hal + bsp_uart_fifo（提供 USART_TypeDef/__IO 前置） */
+#include "lwip/netif.h"
 #include "debug_uart_lock.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
 #include <stdio.h>
+
+/* 蜂鸣器静音状态：set_buzzer 命令置位，节奏引擎/串口任务读取。
+ * 定义在文件顶部，因 DSO_Switch_Cmd_HandleLine()（下方）与 getter 均需引用。 */
+static volatile uint8_t s_buzzer_mute = 0;         /* 1=静音（蜂鸣器完全停，LED 照常） */
 
 /* ---- 最小 JSON 子集辅助（供本模块与 dso_fmc_telemetry 共用） ---- */
 
@@ -33,7 +39,7 @@
 static const char *json_find_key(const char *line, const char *key)
 {
     char pat[32];
-    snprintf(pat, sizeof(pat), "\"%s\"", key);
+//    snprintf(pat, sizeof(pat), "\"%s\"", key);
     return strstr(line, pat);
 }
 
@@ -119,23 +125,47 @@ int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
         return 1;
     }
 
+    if (strcmp(cmd, "set_buzzer") == 0) {
+        const char *result = "ok";
+        const char *error  = "";
+        if (!json_get_int(line, "on", &on) || (on != 0 && on != 1)) {
+            result = "error";
+            error  = "bad_param";
+        } else {
+            s_buzzer_mute = (on == 1) ? 1u : 0u;
+        }
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"set_buzzer\",\"result\":\"%s\",\"error\":\"%s\"}",
+                 seq, result, error);
+        return 1;
+    }
+
     if (strcmp(cmd, "get_switch") == 0) {
         uint8_t led = DSO_Switch_GetLedBitmap();
+        uint8_t eth_l = (netif_default != NULL &&
+                         netif_is_up(netif_default)) ? 1u : 0u;
+        uint8_t usb_a = DSO_Switch_UsbActive();
         /* LED0 心跳按系统 tick 实时计算（1s 翻转），避免独立任务占用堆 */
         led = (uint8_t)((led & ~0x01u) |
                         ((uint8_t)((xTaskGetTickCount() / pdMS_TO_TICKS(1000)) & 1u)));
-        /* LED2(bit1)=温度报警：SHT40 >阈值 亮（黄）；LED3(bit2)=电流报警：INA226 过流 亮（红） */
+        /* LED2(bit1)=温度告警：SHT40 分级≥预警(level≥1) 亮（黄）；
+         * LED3(bit2)=电流告警：U10 或 U44 分级≥预警 亮（红） */
         led = (uint8_t)((led & ~0x06u) |
-                        (DSO_Sht40_HiAlarm() ? 0x02u : 0u) |
-                        (DSO_Ina226_PowerOk() ? 0u : 0x04u));
+                        (DSO_Sht40_GetLevel() >= 1u ? 0x02u : 0u) |
+                        ((DSO_Ina226_GetLevel() >= 1u ||
+                          DSO_Ina226U44_GetLevel() >= 1u) ? 0x04u : 0u));
         snprintf(reply, reply_sz,
                  "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
                  "\"cmd\":\"get_switch\",\"result\":\"ok\",\"error\":\"\","
-                 "\"data\":{\"sw\":%u,\"led\":%u,\"temp\":%ld,\"temp_ok\":%u}}",
+                 "\"data\":{\"sw\":%u,\"led\":%u,\"temp\":%ld,\"temp_ok\":%u,"
+                 "\"eth_link\":%u,\"usb_active\":%u,\"buzzer_mute\":%u}}",
                  seq, (unsigned)DSO_Switch_GetBitmap(),
                  (unsigned)led,
                  (long)DSO_Sht40_GetTempDezi(),
-                 (unsigned)DSO_Sht40_IsValid());
+                 (unsigned)DSO_Sht40_IsValid(),
+                 (unsigned)eth_l, (unsigned)usb_a,
+                 (unsigned)DSO_Switch_BuzzerMute());
         return 1;
     }
 
@@ -146,6 +176,7 @@ int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
 #define SW_SERIAL_LINE_MAX 128
 static char s_serial_line[SW_SERIAL_LINE_MAX];
 static int  s_serial_line_len;
+static volatile uint32_t s_last_usb_rx_tick = 0;   /* USB-UART 最近收行 tick（YDS5 源） */
 
 static void vSwitchSerialTask(void *pvParameters)
 {
@@ -158,6 +189,7 @@ static void vSwitchSerialTask(void *pvParameters)
             if (ch == '\n') {
                 char reply[256];
                 s_serial_line[s_serial_line_len] = '\0';
+                s_last_usb_rx_tick = xTaskGetTickCount();
                 /* 诊断：打印收到的每一行，确认串口 RX 通路（定位后移除） */
                 DebugUartLock();
                 printf("[SER] got %d: %s\r\n", s_serial_line_len, s_serial_line);
@@ -208,4 +240,20 @@ int DSO_Switch_Cmd_JsonGetStr(const char *line, const char *key, char *buf, size
 int DSO_Switch_Cmd_JsonGetInt(const char *line, const char *key, int *out)
 {
     return json_get_int(line, key, out);
+}
+
+/* 蜂鸣器静音状态（GUI set_buzzer 置位；节奏引擎读取） */
+uint8_t DSO_Switch_BuzzerMute(void)
+{
+    return s_buzzer_mute;
+}
+
+/* USB-UART 通道 5s 内是否有活动（YDS5 数据源；串口收过行即置位） */
+uint8_t DSO_Switch_UsbActive(void)
+{
+    if (s_last_usb_rx_tick == 0u) {
+        return 0u;
+    }
+    return ((uint32_t)xTaskGetTickCount() - s_last_usb_rx_tick)
+           < pdMS_TO_TICKS(5000u) ? 1u : 0u;
 }

@@ -6,6 +6,7 @@
 #define DSO_SWITCH_CMD_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,6 +31,15 @@ int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz);
 /** 最小 JSON 子集：按 key 读取字符串/整数值（容忍空白）。供遥测/命令模块共用。 */
 int DSO_Switch_Cmd_JsonGetStr(const char *line, const char *key, char *buf, size_t buf_sz);
 int DSO_Switch_Cmd_JsonGetInt(const char *line, const char *key, int *out);
+
+/**
+ * USB-UART 通道 5s 内是否有活动（YDS5/USB 状态灯数据源）。
+ * 串口收到完整行即刷新。返回 1=有活动。
+ */
+uint8_t DSO_Switch_UsbActive(void);
+
+/** 蜂鸣器静音（GUI set_buzzer 置位，节奏引擎读取；1=完全静音，LED 照常）。 */
+uint8_t DSO_Switch_BuzzerMute(void);
 
 #ifdef __cplusplus
 }
