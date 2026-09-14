@@ -1,0 +1,10 @@
+# Keil 构建产物
+Project/MDK-ARM(uV5)/Objects/
+Project/MDK-ARM(uV5)/Listings/
+*.o
+*.crf
+*.axf
+*.lnp
+*.dep
+*.bak
+*.uvguix.*

@@ -1,0 +1,10 @@
+; DSO_V8.5+ETH: simplified to match reference layout (v8)
+LR_IROM1 0x08000000 0x00100000  {
+  ER_IROM1 0x08000000 0x00100000  {
+   *.o (RESET, +First) *(InRoot$$Sections) .ANY (+RO) .ANY (+XO)
+  }
+  RW_IRAM1 0x20000000 0x00020000  { .ANY (+RW +ZI) }
+  RW_IRAM2 0x24000000 0x00080000  { *(.RAM_D2) *heap_4.o (+RW +ZI) .ANY (+RW +ZI) }
+  RW_IRAM4 0x38000000 0x00010000  { .ANY (+RW +ZI) }
+}
+LR_IROM2 0x08100000 0x00100000  { ER_IROM2 0x08100000 0x00100000  { .ANY (+RO) } }

@@ -1,0 +1,534 @@
+/**
+ * @file bsp.c
+ * @brief 板级�?持包入口：MPU、I/D Cache�?400MHz 时钟、HAL_Init、基�?外�?�初始化�?
+ */
+
+/*
+*********************************************************************************************************
+*
+*	ģ������ : BSPģ��(For STM32H7)
+*	�ļ����� : bsp.c
+*	��    �� : V1.0
+*	˵    �� : ����Ӳ���ײ�������������ļ���ÿ��c�ļ����� #include "bsp.h" ���������е���������ģ�顣
+*			   bsp = Borad surport packet �弶֧�ְ�
+*	�޸ļ�¼ :
+*		�汾��  ����         ����       ˵��
+*		V1.0    2018-07-29  Eric2013   ��ʽ����
+*
+*	Copyright (C), 2018-2030, ���������� www.armfly.com
+*
+*********************************************************************************************************
+*/
+#include "bsp.h"
+#include "y_t_stress_ab.h"
+
+
+
+/*
+*********************************************************************************************************
+*	                                   ��������
+*********************************************************************************************************
+*/
+static void SystemClock_Config(void);
+/*
+*********************************************************************************************************
+*   �? �? �?: CPU_CACHE_Enable
+*   功能说明: CPU_CACHE_Enable 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
+*********************************************************************************************************
+*/
+static void CPU_CACHE_Enable(void);
+/*
+*********************************************************************************************************
+*   �? �? �?: MPU_Config
+*   功能说明: MPU_Config 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
+*********************************************************************************************************
+*/
+static void MPU_Config(void);
+
+
+/*
+*********************************************************************************************************
+*	                                   ��������
+*********************************************************************************************************
+*/
+static void SystemClock_Config(void);
+/*
+*********************************************************************************************************
+*   �? �? �?: CPU_CACHE_Enable
+*   功能说明: CPU_CACHE_Enable 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
+*********************************************************************************************************
+*/
+static void CPU_CACHE_Enable(void);
+/*
+*********************************************************************************************************
+*   �? �? �?: MPU_Config
+*   功能说明: MPU_Config 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
+*********************************************************************************************************
+*/
+static void MPU_Config(void);
+
+/*
+*********************************************************************************************************
+*	�� �� ��: System_Init
+*	����˵��: ϵͳ��ʼ������Ҫ��MPU��Cache��ϵͳʱ������
+*	��    �Σ���
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+void System_Init(void)
+{
+		/* Isolate cloud-bridge FPGA BEFORE any FMC access.
+		 * J1B: FMC_DB[15:0] data bus on BTB corrupts FMC — SN74LVC257 isolated
+		 *      via PH8=HIGH (Cloud_EN). PD6 (FMC_NWAIT) is NOT touched: it
+		 *      multiplexes LCD_B2 and must stay free for LCD_RGB_Init.
+		 * PC6=nCONFIG held LOW (FPGA in reset); PE3/PH6/PH7 config control LOW;
+		 * PC10-12 (RISC-V JTAG) muted as inputs. */
+		__HAL_RCC_GPIOE_CLK_ENABLE();
+		__HAL_RCC_GPIOH_CLK_ENABLE();
+		__HAL_RCC_GPIOC_CLK_ENABLE();
+		HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_RESET);  /* PC6=nCONFIG LOW=FPGA reset */
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(GPIOH, GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(GPIOH, GPIO_PIN_8, GPIO_PIN_SET); /* PH8=HIGH: Cloud_EN disable bus */
+		{ GPIO_InitTypeDef g={0};
+		  g.Pull=GPIO_NOPULL; g.Mode=GPIO_MODE_OUTPUT_PP; g.Speed=GPIO_SPEED_FREQ_LOW;
+		  g.Pin=GPIO_PIN_6; HAL_GPIO_Init(GPIOC, &g);  /* PC6 output */
+		  g.Pin=GPIO_PIN_3; HAL_GPIO_Init(GPIOE, &g);
+		  g.Pin=GPIO_PIN_6|GPIO_PIN_7; HAL_GPIO_Init(GPIOH, &g);
+		  g.Pin=GPIO_PIN_8; HAL_GPIO_Init(GPIOH, &g); /* PH8=Cloud_EN, init HIGH */
+		  g.Mode=GPIO_MODE_INPUT; g.Pull=GPIO_PULLUP;
+		  g.Pin=GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12; HAL_GPIO_Init(GPIOC, &g); }
+
+
+
+
+
+	MPU_Config();
+	CPU_CACHE_Enable();
+
+	/* 
+       STM32H7xx HAL ���ʼ������ʱϵͳ�õĻ���H7�Դ���64MHz��HSIʱ��:
+	   - ���ú���HAL_InitTick����ʼ���δ�ʱ���ж�1ms��
+	   - ����NVIV���ȼ�����Ϊ4��
+	 */
+	HAL_Init();
+
+	/* 
+       ����ϵͳʱ�ӵ�400MHz
+       - �л�ʹ��HSE��
+       - �˺���������?�ֱ���SystemCoreClock������������HAL_InitTick��
+    */
+	SystemClock_Config();
+
+	/* 
+	   Event Recorder��
+	   - �����ڴ���ִ��ʱ�������MDK5.25�������ϰ汾��֧�֣�IAR��֧�֡�
+	   - Ĭ�ϲ���������Ҫʹ�ܴ�ѡ���ؿ�V7�������û��ֲ��?8��
+	*/	
+#if Enable_EventRecorder == 1  
+	/* ��ʼ��EventRecorder������ */
+	EventRecorderInitialize(EventRecordAll, 1U);
+	EventRecorderStart();
+#endif
+
+	Bsp_DisableUnalignedFaultTrap();
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: bsp_Init
+*	����˵��: ��ʼ�����е�Ӳ���豸���ú�������CPU�Ĵ���������ļĴ�������ʼ��һЩ�?�ֱ�����ֻ��Ҫ����һ��
+*	��    ��: ��
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+void Bsp_DisableUnalignedFaultTrap(void)
+{
+	SCB->CCR &= ~(uint32_t)SCB_CCR_UNALIGN_TRP_Msk;
+	__DSB();
+	__ISB();
+}
+
+/*
+*********************************************************************************************************
+*   �? �? �?: bsp_Init
+*   功能说明: bsp_Init 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
+*********************************************************************************************************
+*/
+void bsp_Init(void)
+{
+
+	bsp_InitDWT();      /* ��ʼ��CM7�ں˵�ʱ�����ڼ����� */
+	/* LCD/SDRAMʵ����ʹ��LTDC��չIO�����ñ��걾��ť��ʼ������IO��ͻ */
+	bsp_InitUart();		/* ��ʼ������ */
+	/* LCD/SDRAMʵ�����FMC��չIO��ʼ����������SDRAM���ų�ͻ */
+	bsp_InitLed();    	/* ��ʼ��LED */	
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: SystemClock_Config
+*	����˵��: ��ʼ��ϵͳʱ��
+*            	System Clock source            = PLL (HSE)
+*            	SYSCLK(Hz)                     = 400000000 (CPU Clock)
+*           	HCLK(Hz)                       = 200000000 (AXI and AHBs Clock)
+*            	AHB Prescaler                  = 2
+*            	D1 APB3 Prescaler              = 2 (APB3 Clock  100MHz)
+*            	D2 APB1 Prescaler              = 2 (APB1 Clock  100MHz)
+*            	D2 APB2 Prescaler              = 2 (APB2 Clock  100MHz)
+*            	D3 APB4 Prescaler              = 2 (APB4 Clock  100MHz)
+*            	HSE Frequency(Hz)              = 25000000
+*           	PLL_M                          = 5
+*            	PLL_N                          = 160
+*            	PLL_P                          = 2
+*            	PLL_Q                          = 4
+*            	PLL_R                          = 2
+*            	VDD(V)                         = 3.3
+*            	Flash Latency(WS)              = 4
+*	��    ��: ��
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+static void SystemClock_Config(void)
+{
+	RCC_ClkInitTypeDef RCC_ClkInitStruct;
+	RCC_OscInitTypeDef RCC_OscInitStruct;
+	HAL_StatusTypeDef ret = HAL_OK;
+
+	/* ��סSCU(Supply configuration update) */
+	MODIFY_REG(PWR->CR3, PWR_CR3_SCUEN, 0);
+
+	/* 
+      1��оƬ�ڲ���LDO��ѹ������ĵ�ѹ��Χ�����?VOS1��VOS2��VOS3����ͬ��Χ��Ӧ��ͬ��Flash���ٶȣ�
+         ���鿴�ο��ֲ��Table 12�ı��?
+      2������ѡ��ʹ��VOS1����ѹ��Χ1.15V - 1.26V��
+    */
+	__HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+	while(!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) {}
+
+	/* ʹ��HSE����ѡ��HSE��ΪPLLʱ��Դ */
+	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+	RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
+	RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
+	RCC_OscInitStruct.CSIState = RCC_CSI_OFF;
+	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+		
+	RCC_OscInitStruct.PLL.PLLM = 5;
+	RCC_OscInitStruct.PLL.PLLN = 160;
+	RCC_OscInitStruct.PLL.PLLP = 2;
+	RCC_OscInitStruct.PLL.PLLR = 2;
+	RCC_OscInitStruct.PLL.PLLQ = 4;		
+		
+	RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
+	RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_2;	
+	ret = HAL_RCC_OscConfig(&RCC_OscInitStruct);
+	if(ret != HAL_OK)
+	{
+        Error_Handler(__FILE__, __LINE__);
+	}
+
+	/* 
+       ѡ��PLL��������?ϵͳʱ��
+       ����RCC_CLOCKTYPE_SYSCLKϵͳʱ��
+       ����RCC_CLOCKTYPE_HCLK ʱ�ӣ���ӦAHB1��AHB2��AHB3��AHB4����
+       ����RCC_CLOCKTYPE_PCLK1ʱ�ӣ���ӦAPB1����
+       ����RCC_CLOCKTYPE_PCLK2ʱ�ӣ���ӦAPB2����
+       ����RCC_CLOCKTYPE_D1PCLK1ʱ�ӣ���ӦAPB3����
+       ����RCC_CLOCKTYPE_D3PCLK1ʱ�ӣ���ӦAPB4����     
+    */
+	RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_D1PCLK1 | RCC_CLOCKTYPE_PCLK1 | \
+								 RCC_CLOCKTYPE_PCLK2  | RCC_CLOCKTYPE_D3PCLK1);
+
+	RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+	RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
+	RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
+	RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV2;  
+	RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2; 
+	RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV2; 
+	RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV2; 
+	
+	/* �˺��������SystemCoreClock������������HAL_InitTick */
+	ret = HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4);
+	if(ret != HAL_OK)
+	{
+        Error_Handler(__FILE__, __LINE__);
+	}
+
+    /*
+      ʹ��IO�ĸ���ģʽ��Ҫʹ��IO������������������������ 
+      ��1��ʹ��CSI clock
+      ��2��ʹ��SYSCFG clock
+      ��3��ʹ��I/O������Ԫ�� ����SYSCFG_CCCSR�Ĵ�����bit0
+    */
+	__HAL_RCC_CSI_ENABLE() ;
+
+	__HAL_RCC_SYSCFG_CLK_ENABLE() ;
+
+	HAL_EnableCompensationCell();
+
+   /* AXI SRAM��ʱ�����ϵ��Զ�ʹ�ܵģ���D2���SRAM1��SRAM2��SRAM3Ҫ����ʹ�� */	
+	__HAL_RCC_D2SRAM1_CLK_ENABLE();
+	__HAL_RCC_D2SRAM2_CLK_DISABLE();
+	__HAL_RCC_D2SRAM3_CLK_DISABLE();
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: Error_Handler
+*	��    ��: file : Դ�����ļ����ơ��ؼ��� __FILE__ ��ʾԴ�����ļ�����
+*			  line �������кš��ؼ��� __LINE__ ��ʾԴ�����к�
+*	�� �� ֵ: ��
+*		Error_Handler(__FILE__, __LINE__);
+*********************************************************************************************************
+*/
+void Error_Handler(char *file, uint32_t line)
+{
+	if (line == 0)
+	{
+		return;
+	}
+
+	printf("\r\n[ERR] Error_Handler file=%s line=%lu\r\n",
+	       (file != 0) ? file : "?",
+	       (unsigned long)line);
+
+	while(1)
+	{
+	}
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: MPU_Config
+*	����˵��: ����MPU
+*	��    ��: ��
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+static void MPU_Config( void )
+{
+	MPU_Region_InitTypeDef MPU_InitStruct;
+
+	/* ��ֹ MPU */
+	HAL_MPU_Disable();
+
+	/* Region 0: AXI SRAM (0x24000000, 512KB) Write-Back Cacheable */
+	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
+	MPU_InitStruct.BaseAddress      = 0x24000000;
+	MPU_InitStruct.Size             = MPU_REGION_SIZE_512KB;
+	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+	MPU_InitStruct.IsBufferable     = MPU_ACCESS_BUFFERABLE;
+	MPU_InitStruct.IsCacheable      = MPU_ACCESS_CACHEABLE;
+	MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+	MPU_InitStruct.Number           = MPU_REGION_NUMBER0;
+	MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL1;
+	MPU_InitStruct.SubRegionDisable = 0x00;
+	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+	
+	
+	/* ����FMC��չIO��MPU����ΪDevice����Strongly Ordered */
+	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
+	MPU_InitStruct.BaseAddress      = 0x60000000;
+	MPU_InitStruct.Size             = MPU_REGION_SIZE_64MB;	
+	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+	MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
+	MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;	/* ������MPU_ACCESS_CACHEABLE�������?2��CS��WE�ź� */
+	MPU_InitStruct.IsShareable      = MPU_ACCESS_SHAREABLE;
+	MPU_InitStruct.Number           = MPU_REGION_NUMBER1;
+	MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL0;
+	MPU_InitStruct.SubRegionDisable = 0x00;
+	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
+	
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+	/* Region 2: 全体 SDRAM (0xC0000000, 32MB) �? Write-Through, No Write-Allocate
+	 * TEX=0, C=1, B=0
+	 * 覆盖�?�? SDRAM，包�?物理缓冲区（LTDC 直接�? SDRAM）和其他用�?��??
+	 * 物理缓冲�? (0xC0100000 / 0xC0200000) 使用此属性：
+	 *   CPU 旋转写直�? SDRAM �? LTDC 无需任何 CleanDCache 即可读到�?新数�? */
+	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
+	MPU_InitStruct.BaseAddress      = 0xC0000000;
+	MPU_InitStruct.Size             = MPU_REGION_SIZE_32MB;
+	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+	MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;  /* B=0 */
+	MPU_InitStruct.IsCacheable      = MPU_ACCESS_CACHEABLE;       /* C=1 */
+	MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+	MPU_InitStruct.Number           = MPU_REGION_NUMBER2;
+	MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL0;             /* TEX=0, C=1, B=0 = WT */
+	MPU_InitStruct.SubRegionDisable = 0x00;
+	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+#if (Y_T_AB_NONCACHEABLE_DISPLAY_VRAM != 0)
+	/* Region 3: display VRAM diagnostic override, 0xC0000000..0xC03FFFFF.
+	 * Higher MPU region number overrides the 32MB SDRAM WT region above.
+	 * Covers logical VRAM plus both physical LTDC framebuffers. */
+	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
+	MPU_InitStruct.BaseAddress      = 0xC0000000;
+	MPU_InitStruct.Size             = MPU_REGION_SIZE_4MB;
+	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+	MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
+	MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
+	MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+	MPU_InitStruct.Number           = MPU_REGION_NUMBER3;
+	MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL1;
+	MPU_InitStruct.SubRegionDisable = 0x00;
+	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+#endif
+
+	/* Region 4: ETH DMA descriptors + LwIP heap (0x30000000, D2 SRAM1, 128KB=整个 SRAM1)
+	 * MEM_SIZE 64K 时堆到 0x30014000，128KB 区域覆盖到 0x30020000，防止 DACCVIOL
+	 * Must be Non-Cacheable: DMA controller reads/writes descriptor OWN/status
+	 * bits directly; CPU must always see coherent values.  This also covers
+	 * LWIP_RAM_HEAP_POINTER at 0x30004000 so TX pbuf payloads need no explicit
+	 * cache clean before DMA transmission. */
+	MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
+	MPU_InitStruct.BaseAddress      = 0x30000000;
+	MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_128KB;
+	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+	MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
+	MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
+	MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+	MPU_InitStruct.Number           = MPU_REGION_NUMBER4;
+	MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL1;
+	MPU_InitStruct.SubRegionDisable = 0x00;
+	MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+	/* Region 5: ETH RxPool + TxConfig (0x38000000, D3 SRAM4, 64KB)
+	 * Non-Cacheable: received frames are DMA-written here; TX config must
+	 * be visible to DMA descriptor setup without cache flushes.  The pbuf
+	 * payload backing RX_POOL at 0x38000000 goes through SCB_InvalidateDCache
+	 * in HAL_ETH_RxLinkCallback, which is a safe no-op on NC memory. */
+	MPU_InitStruct.BaseAddress      = 0x38000000;
+	MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_64KB;
+	MPU_InitStruct.Number           = MPU_REGION_NUMBER5;
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+	/*
+	 * PlotBuf / 波形缓冲�? emWin GUI_ALLOC �?动�?�分配，基址随构建与堆变化，�?动时无法�? MPU_Config 写�?��?�夹心�?�区�?
+	 * 若将来把波形缓冲改为链接器固定�?�，�?在�?��?�加更高区号（�?? Region4）压�? Region0 的一小�?�：�?�? RW、两�? NO_ACCESS�?
+	 * 勿用整�?? 0x2407xxxx �? emWin BSS 全只读：会与 WM 正常写全�?冲突�?
+	 */
+
+	/* 默�?�路径：逻辑缓冲与物理缓冲使�? Region 2 �? Write-Through�?
+	 * 当前排查�?径可通过 Region 3 将显�? VRAM 临时覆盖�? Non-Cacheable�?
+	 * 用于验证 WT SDRAM �?见�?�是否�?�致偶发屏闪�? */
+
+	/*ʹ�� MPU */
+	HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: CPU_CACHE_Enable
+*	����˵��: ʹ��L1 Cache
+*	��    ��: ��
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+static void CPU_CACHE_Enable(void)
+{
+	/* ʹ�� I-Cache */
+	SCB_EnableICache();
+
+	/* ʹ�� D-Cache（Y_T_AB_DISABLE_DCACHE=1 时跳过，仅作 A/B 定位�? */
+#if (Y_T_AB_DISABLE_DCACHE == 0)
+	SCB_EnableDCache();
+#endif
+
+	Bsp_DisableUnalignedFaultTrap();
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: bsp_RunPer10ms
+*	����˵��: �ú���ÿ��10ms��Systick�жϵ���1�Ρ����? bsp_timer.c�Ķ�ʱ�жϷ������һЩ����ʱ���?���ϸ��?
+*			������Է��ڴ˺��������磺�����?�衢���������п��Ƶȡ�
+*	��    ��: ��
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+void bsp_RunPer10ms(void)
+{
+	/* LCDʵ����δʹ�ð�����ѯ�� */
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: bsp_RunPer1ms
+*	����˵��: �ú���ÿ��1ms��Systick�жϵ���1�Ρ����? bsp_timer.c�Ķ�ʱ�жϷ������һЩ���?�����Դ��������?
+*			 ���Է��ڴ˺��������磺��������ɨ�衣
+*	��    ��: ��
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+void bsp_RunPer1ms(void)
+{
+	
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: bsp_Idle
+*	����˵��: ����ʱִ�еĺ�����һ����������for��whileѭ������������Ҫ���� CPU_IDLE() �������ñ�������
+*			 ������ȱʡΪ�ղ������û��������ι��������CPU��������ģʽ�Ĺ��ܡ�
+*	��    ��: ��
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+void bsp_Idle(void)
+{
+	/* --- ι�� */
+
+	/* --- ��CPU�������ߣ���Systick��ʱ�жϻ��ѻ��������жϻ��� */
+
+	/* ���� emWin ͼ�ο⣬���Բ���ͼ�ο���Ҫ����ѯ���� */
+	//GUI_Exec();
+
+	/* ���� uIP Э�飬���Բ���uip��ѯ���� */
+	//TOUCH_CapScan();
+}
+
+/*
+*********************************************************************************************************
+*	�� �� ��: HAL_Delay
+*	����˵��: �ض�������ӳٺ������滻HAL�еĺ�������ΪHAL�е�ȱʡ����������Systick�жϣ������USB��SD��
+*             �ж������ӳٺ��������������Ҳ�����?������HAL_NVIC_SetPriority����Systick�ж�
+*	��    ��: ��
+*	�� �� ֵ: ��
+*********************************************************************************************************
+*/
+/* ��ǰ����ʹ��stm32h7xx_hal.cĬ�Ϸ�ʽʵ�֣�δʹ�������ض���ĺ���? */
+#if 0
+/*
+*********************************************************************************************************
+*   �? �? �?: HAL_Delay
+*   功能说明: HAL_Delay 的函数接口或内部实现�?
+*   �?    �?: 参�?�函数声明�??
+*   �? �? �?: 参�?�函数声明�??
+*********************************************************************************************************
+*/
+void HAL_Delay(uint32_t Delay)
+{
+	bsp_DelayUS(Delay * 1000);
+}
+#endif
+
+/***************************** ���������� www.armfly.com (END OF FILE) *********************************/
+
