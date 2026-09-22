@@ -25,11 +25,11 @@ module_telemetry/
 
 | # | 模块 | 硬件/引脚 | 状态 |
 |---|---|---|---|
-| 1 | 密码芯片 ATECC608B（身份登录/防篡改） | I2C 0x60，PB7/PB8 | ⏸ 挂起：规格+Python+驱动已完成；芯片脚供电到 3.3V 但 0x60 无应答、总线 0x7C 为异常器件（拒收数据），判非标准 ATECC，待独立适配器/换片验证 |
+| 1 | 密码芯片 ATECC608B-SSHDA-T（身份登录/防篡改） | I2C **0x60**（W=0xC0/R=0xC1），PB7/PB8 | 🔄 重新调试：SSHDA-T 默认 7-bit **0x60**，且**必须先 Wake**（≤100kHz 发 0x00 使 SDA 低 ≥60µs → 等 ≥1.5ms），否则 Sleep 中一律 NACK —— 此前从未在"规范的 0x00 Wake 之后"扫过 0x60，故扫不到；旧"0x7C 异常器件/判非标准 ATECC"结论作废。已按规范重做（0x60 主探 + 0x35/0x36 备选对照），待烧录验证 |
 | 2 | PCAL6524HEAZ：13 开关 + 5 LED(YDS1-5) | I2C 0x22, PB7/PB8；INT# PH8 | ✅ 已上线：sw/yds/eth/usb 上报 + YDS1-5 声光联动点灯（02 规格含总则，阈值/蜂鸣已对齐最新） |
-| 3 | SHT40 温湿度 | I2C 0x44, PB7/PB8 | ✅ 已上线：temp/level 上报 + 蜂鸣联动（58/60/65℃） |
+| 3 | SHT40 温湿度 | I2C 0x44, PB7/PB8 | ✅ 已上线：temp_dezi + **rh_centi**（湿度）+ level 上报 + 蜂鸣联动（58/60/65℃） |
 | 4 | U10-INA226 过桥板电流 | I2C 0x41, PB7/PB8, 100mΩ | ✅ 已上线：cur_ma/level + overcurrent 事件；阈值按实测标定（额定 35mA） |
-| 5 | U44-INA226 核心板电流 | I2C 0x40, PB7/PB8, 20mΩ | ✅ 已上线：cur_ma/level；阈值按实测标定（额定 135mA） |
+| 5 | U44-INA226 核心板电流 | I2C 0x40, PB7/PB8, 20mΩ | ✅ 已上线：cur_ma/level；阈值按实测标定（正常 118mA → 额定 160mA） |
 | 6 | BGM_ADC_DAC 模拟通道控制 | （DSO 采样已实现） | ✅ 已上线：频率计快照+采样态上报 |
 | 7 | BGM_DDS 接口控制（AD9833） | P2_6/PA4/PC10/PC12/PD2 | ⏳ 待做 |
 | 8 | SP706T 看门狗（远程恢复） | WDI PB9 / PFO# PG10 | 🔶 规格+Python+固件(dso_watchdog)+上报已验帧；喂狗策略/配置参数待最后单独对齐（PFO# 语义待确认） |

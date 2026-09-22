@@ -1,6 +1,6 @@
 /**
  * @file dso_atecc608b.c
- * @brief ATECC608B 驱动：I2C 命令/状态机（软件 I2C BSP_I2C_UI，PB7/PB8，0x60）。
+ * @brief ATECC608B-SSHDA-T 驱动：I2C 命令/状态机（软件 I2C BSP_I2C_UI，PB7/PB8，7-bit 0x60）。
  *
  * 协议（Microchip DS40002138A/DS40002154B §4.1/§7）：
  *   写：START [addr+W] [word=0x03] {Count Op P1 P2lo P2hi Data… CRC16lo CRC16hi} STOP
@@ -14,6 +14,7 @@
  */
 #include "dso_atecc608b.h"
 #include "bsp_i2c_ui.h"
+#include "debug_uart_lock.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stdio.h>
@@ -21,9 +22,13 @@
 #define ATECC_RETRY_MS   1u          /* 忙时轮询间隔 */
 #define ATECC_PROBE_N    3u          /* 探测重试次数 */
 
-/* Config 区锁状态偏移（真机联调核对：LockValue@0x15、LockConfig@0x44） */
-#define ATECC_CFG_LOCK_VALUE_OFF  0x15u
-#define ATECC_CFG_LOCK_CONFIG_OFF 0x44u
+/* Config 区关键字节偏移（ATECC608 存储器映射；注意 word n 的字节偏移 = n*4，
+ * 故 LockValue/LockConfig 位于 word 0x15 的 byte2/byte3 = 0x56/0x57） */
+#define ATECC_CFG_REV_OFF           0x08u   /* RevNum（608B 低字节 0x60） */
+#define ATECC_CFG_SN8_OFF           0x0Cu   /* SN[8] */
+#define ATECC_CFG_LOCK_VALUE_OFF    0x56u   /* LockValue（0x00=已锁） */
+#define ATECC_CFG_LOCK_CONFIG_OFF   0x57u   /* LockConfig（0x00=已锁） */
+#define ATECC_CFG_SLOT_LOCKED_OFF   0x58u   /* SlotLocked[0..1] */
 
 static uint8_t s_last_status = 0xFFu;   /* 最近执行状态码 */
 /* 当前工作地址：默认 0x60；探测发现实际配置地址（如 0x50/0x64）后更新 */
@@ -92,6 +97,13 @@ int DSO_Atecc608b_Exec(uint8_t opcode, uint8_t p1, uint16_t p2,
     if ((in_len > 0u && in == NULL) || (out_max > 0u && out == NULL)) {
         return DSO_ATECC_ERR_PARAM;
     }
+
+#if ATECC_WAKE_BEFORE_EXEC
+    /* 芯片在 Sleep 时对任何命令都不响应 —— 每帧先按规范 Wake */
+    if (DSO_Atecc608b_Wake(NULL, NULL) != 0) {
+        return DSO_ATECC_ERR_TIMEOUT;
+    }
+#endif
     count = (uint16_t)(7u + in_len);          /* Count+Op+2×Param+Data+2×CRC */
     if (count < 7u || count > DSO_ATECC608B_GROUP_MAX) {
         return DSO_ATECC_ERR_PARAM;
@@ -185,6 +197,54 @@ int DSO_Atecc608b_Exec(uint8_t opcode, uint8_t p1, uint16_t p2,
     return (int)data_len;
 }
 
+/* ---- 唤醒（TNGTLS 规范） ---- */
+
+static int atecc_readprobe(uint8_t addr);   /* 前置声明：供 Probe / 诊断使用 */
+
+int DSO_Atecc608b_Wake(uint8_t *zero_acked, uint16_t *ready_ms)
+{
+    uint32_t t0;
+    uint32_t el;
+    uint8_t acked;
+    uint8_t round;
+    int p = -1;
+
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+        /* 调度器未启动：不能 vTaskDelay，只能 GPIO 脉冲唤醒 */
+        BSP_I2C_UI_WakePulse();
+        if (zero_acked != NULL) { *zero_acked = 0u; }
+        if (ready_ms != NULL)   { *ready_ms = 0xFFFFu; }
+        return DSO_ATECC_ERR_TIMEOUT;
+    }
+
+    /* ≤100kHz 发 N 个 0x00（SDA 连续低 ≥60µs）→ 释放上升沿唤醒；速率在 BSP 内强制 */
+    BSP_I2C_UI_Lock();
+    acked = (uint8_t)BSP_I2C_UI_WakeZeroBytes(DSO_ATECC_WAKE_ZB_N);
+    BSP_I2C_UI_Unlock();
+    if (zero_acked != NULL) { *zero_acked = acked; }
+
+    /* 规范：Wake 后 ≥tWHI(1.5ms) 才能访问；自检使能时 tWHIST≈20ms。
+     * 先等 tWHI 探一次地址，未中就按 tWHIST 保守再等一轮。 */
+    t0 = (uint32_t)xTaskGetTickCount();
+    vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_TWHI_MS));
+    for (round = 0u; round < 2u; round++) {
+        BSP_I2C_UI_Lock();
+        p = BSP_I2C_UI_Probe(s_addr);
+        BSP_I2C_UI_Unlock();
+        if (p == 0) {
+            break;
+        }
+        if (round == 0u) {
+            vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_TWHI_STD_MS));
+        }
+    }
+    el = (uint32_t)(xTaskGetTickCount() - t0) * portTICK_PERIOD_MS;
+    if (ready_ms != NULL) {
+        *ready_ms = (p == 0) ? (uint16_t)el : 0xFFFFu;
+    }
+    return (p == 0) ? 0 : DSO_ATECC_ERR_TIMEOUT;
+}
+
 /* ---- 常用包装 ---- */
 
 int DSO_Atecc608b_InfoRevision(uint8_t rev[4])
@@ -212,27 +272,28 @@ int DSO_Atecc608b_ReadConfig32(uint8_t block, uint8_t out[32])
 
 int DSO_Atecc608b_Probe(void)
 {
-    /* 候选地址（Config 区可定制，非默认 0x60；含 0x50——仅当读探针 NACK 才发命令，
-     * 内存映射型(EEPROM 等 R=ok)被自动跳过，不会误写）。 */
-    static const uint8_t cand[] = { 0x60u, 0x7Cu, 0x50u, 0x64u, 0x68u, 0x6Au };
+    /* 候选地址：0x35 = ATECC608B-TNGTLS 出厂默认（权威）；0x36 备选；
+     * 其余为历史候选。每个候选都先按规范 Wake，再"读探针 NACK 才发命令"
+     * （读也 ACK → 内存映射型器件如 EEPROM，跳过以防误写）。 */
+    static const uint8_t cand[] = { 0x36u, 0x60u, 0x35u, 0x50u, 0x64u, 0x68u };
     uint8_t rev[4];
     uint8_t ci;
     uint8_t n;
     int rc = DSO_ATECC_ERR_TIMEOUT;
     for (ci = 0u; ci < (uint8_t)(sizeof(cand) / sizeof(cand[0])); ci++) {
-        /* 唤醒后：写探针必须 ACK 且读探针必须 NACK（命令/状态型特征） */
-        BSP_I2C_UI_WakePulse();
-        vTaskDelay(pdMS_TO_TICKS(25u));   /* tWHI≥1.5ms；SelfTest 使能时 tWHIST=20ms */
+        s_addr = cand[ci];
+        if (DSO_Atecc608b_Wake(NULL, NULL) != 0) {
+            continue;   /* 未就绪（睡眠/无器件/该地址无应答） */
+        }
         if (atecc_readprobe(cand[ci]) == 0) {
             continue;   /* 读也 ACK → 内存映射型（EEPROM 类），跳过，防误写 */
         }
-        s_addr = cand[ci];
         for (n = 0u; n < ATECC_PROBE_N; n++) {
             rc = DSO_Atecc608b_InfoRevision(rev);
             if (rc == 0) {
                 return 0;   /* s_addr 已是找到的地址 */
             }
-            vTaskDelay(pdMS_TO_TICKS(20u));   /* 给足唤醒后/自检余量 */
+            vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_TWHI_STD_MS));
         }
     }
     return rc;
@@ -252,10 +313,13 @@ static int atecc_readprobe(uint8_t addr)
     return rc;
 }
 
-/* 已知器件地址（不打标签跳过读探针） */
+/* 已知器件地址（不打标签跳过读探针）：PCAL6524 0x22、MCP23017 0x26/0x27、
+ * INA226 0x40/0x41、SHT40 0x44、ATECC608B-TNGTLS 0x35/0x36 */
 static int atecc_is_known(uint8_t addr)
 {
-    return (addr == 0x22u || addr == 0x40u || addr == 0x41u || addr == 0x44u);
+    return (addr == 0x22u || addr == 0x26u || addr == 0x27u ||
+            addr == 0x35u || addr == 0x36u ||
+            addr == 0x40u || addr == 0x41u || addr == 0x44u);
 }
 
 /* 扫描并打标签：写 ACK；R=ok(读也 ACK，像 EEPROM) / R=nack(读 NACK，像 ATECC/命令型) */
@@ -287,208 +351,189 @@ static void atecc608b_scan_addrs(void)
     printf("\r\n");
 }
 
+/* 兜底阶梯（0x60 未响应时，每项回答一个具体问题，≤6 行）：
+ *  A) 更长 POR + 0x00 字节法再唤醒一轮 → 探 0x60/0x35/0x36
+ *  B) GPIO 脉冲 wake 1ms/5ms 对照 —— 区分"0x00 字节法实现问题"vs"器件/接线问题"
+ *  C) 全地址 scan（排在 wake 之后，若芯片在总线上应可见 0x60）
+ *  D) 结论行 */
+static void atecc608b_fallback_diag(void)
+{
+    uint8_t a1;
+    uint8_t a2;
+    uint8_t a3;
+
+    vTaskDelay(pdMS_TO_TICKS(200u));
+    BSP_I2C_UI_Lock();
+    a1 = (uint8_t)BSP_I2C_UI_WakeZeroBytes(4u);
+    BSP_I2C_UI_Unlock();
+    vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_TWHI_STD_MS));
+    BSP_I2C_UI_Lock();
+    a2 = (uint8_t)((BSP_I2C_UI_Probe(s_addr) == 0) ? 1u : 0u);
+    a3 = (uint8_t)((BSP_I2C_UI_Probe(0x60u) == 0) ? 1u : 0u);
+    BSP_I2C_UI_Unlock();
+    DebugUartLock();
+    printf("[ATECC] fb zb-wake x4 +200ms por: ack00=%u 0x%02X=%s 0x60=%s\r\n",
+           (unsigned)a1, (unsigned)s_addr, a2 ? "ACK" : "NACK", a3 ? "ACK" : "NACK");
+    DebugUartUnlock();
+
+    BSP_I2C_UI_WakePulseUs(1000u);
+    vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_TWHI_STD_MS));
+    BSP_I2C_UI_Lock();
+    a1 = (uint8_t)((BSP_I2C_UI_Probe(s_addr) == 0) ? 1u : 0u);
+    BSP_I2C_UI_Unlock();
+    BSP_I2C_UI_WakePulseUs(5000u);
+    vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_TWHI_STD_MS));
+    BSP_I2C_UI_Lock();
+    a2 = (uint8_t)((BSP_I2C_UI_Probe(s_addr) == 0) ? 1u : 0u);
+    BSP_I2C_UI_Unlock();
+    DebugUartLock();
+    printf("[ATECC] fb gpio-pulse 1ms:0x%02X=%s 5ms=%s\r\n",
+           (unsigned)s_addr, a1 ? "ACK" : "NACK", a2 ? "ACK" : "NACK");
+    DebugUartUnlock();
+
+    /* 全地址 scan 排在 wake 之后：唤醒若生效，芯片应在此可见 */
+    atecc608b_scan_addrs();
+
+    /* ATECC 特征扫描（不依赖地址假设）：ATECC 只接受 word 0x03，
+     * 故特征 = 地址 ACK **且** word 0x03 该字节也 ACK。普通 EEPROM 虽也
+     * 两个都 ACK，但其 R=ok（内存型）；结合本函数上方 read-probe 结果即可区分。
+     * 只要片子在总线上且已被唤醒，无论其地址是多少都会被此组合逮到。 */
+    /* 特征扫描前再唤醒一次（扫描耗时较长，确保芯片处于醒态） */
+    BSP_I2C_UI_Lock();
+    (void)BSP_I2C_UI_WakeZeroBytes(DSO_ATECC_WAKE_ZB_N);
+    BSP_I2C_UI_Unlock();
+    vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_TWHI_MS));
+    {
+        static const uint8_t w3[1] = { DSO_ATECC608B_WORD_CMD };
+        uint8_t ack[8];
+        uint8_t ad;
+        int r2;
+        DebugUartLock();
+        printf("[ATECC] feat-scan (W-ACK & word0x03-ACK):");
+        DebugUartUnlock();
+        for (ad = 0x08u; ad <= 0x7Fu; ad++) {
+            if (atecc_is_known(ad)) {
+                continue;
+            }
+            BSP_I2C_UI_Lock();
+            r2 = BSP_I2C_UI_DiagTxBytes(ad, w3, 1u, ack);
+            BSP_I2C_UI_Unlock();
+            if (r2 == 0 && ack[1] != 0u) {
+                DebugUartLock();
+                printf(" 0x%02X", (unsigned)ad);
+                DebugUartUnlock();
+            }
+        }
+        DebugUartLock();
+        printf("\r\n");
+        DebugUartUnlock();
+    }
+
+    DebugUartLock();
+    printf("[ATECC] present=0 (no chip / addr / wake) sda_low_probe=%d\r\n",
+           BSP_I2C_UI_SdaLowProbe());
+    DebugUartUnlock();
+}
+
 static void atecc608b_probe_task(void *pv)
 {
-    uint8_t cfg0[32], cfg2[32];
+    uint8_t cfg[128];
     uint8_t rev[4];
+    uint8_t wmain;  /* W 探针：主地址 DSO_ATECC608B_I2C_ADDR */
+    uint8_t rmain;  /* R 探针：主地址 */
+    uint8_t alt60;  /* W 探针对照：SSHDA 0x60 */
+    uint8_t alt35;  /* W 探针对照：TNGTLS 0x35 */
+    uint8_t alt36;  /* W 探针对照：TNGTLS 0x36 */
+    uint8_t zi = 0u;
+    uint16_t rms = 0xFFFFu;
     int rc;
     (void)pv;
 
-    vTaskDelay(pdMS_TO_TICKS(50u));   /* 慢 POR 余量 */
-    atecc608b_scan_addrs();
+    /* 规范：上电 ≥20ms 后才可动 I2C；识别阶段位延迟 5µs（≈100kHz 标准模式） */
+    vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_POR_WAIT_MS));
+    BSP_I2C_UI_SetBitDelayUs(DSO_ATECC_BIT_DELAY_US);
 
-    /* 0x60 诊断：SDA 回读自检 + 唤醒脉冲宽度扫描（60/100/300/1000/5000µs） */
-    {
-        static const uint32_t wus[] = { 60u, 100u, 300u, 1000u, 5000u };
-        uint8_t k;
-        printf("[ATECC] wake-diag sda_low_probe=%d\r\n",
-               BSP_I2C_UI_SdaLowProbe());
-        /* 长拉低 1500ms：请用万用表直接量【芯片 SDA 封装脚】应≈0V（连通则被拉低） */
-        printf("[ATECC] holding SDA low 1500ms - measure chip SDA pin now\r\n");
-        BSP_I2C_UI_SdaLowMs(1500u);
-        printf("[ATECC] released\r\n");
-        /* SCL 翻转 2s：请用万用表量【芯片 SCL 封装脚】DC 电压——
-         * 有翻转(≈1.5-2V)=SCL 到芯片；恒 3.3V=SCL 开路/认错脚 */
-        printf("[ATECC] toggling SCL 2000ms - measure chip SCL pin DC now\r\n");
-        {
-            uint32_t t_end = (uint32_t)xTaskGetTickCount() + pdMS_TO_TICKS(2000u);
-            while ((int32_t)(t_end - (uint32_t)xTaskGetTickCount()) > 0) {
-                BSP_I2C_UI_Lock();
-                (void)BSP_I2C_UI_Probe(0x60u);
-                BSP_I2C_UI_Unlock();
+    s_addr = DSO_ATECC608B_I2C_ADDR;
+    rc = DSO_Atecc608b_Wake(&zi, &rms);
+    DebugUartLock();
+    printf("[ATECC] addr7=0x%02X W=0x%02X R=0x%02X por=%ums zb0x00x%u@100k "
+           "ack00=%u wake=%d ready=%ums\r\n",
+           (unsigned)s_addr, (unsigned)((s_addr << 1) | 0u),
+           (unsigned)((s_addr << 1) | 1u),
+           (unsigned)DSO_ATECC_POR_WAIT_MS, (unsigned)DSO_ATECC_WAKE_ZB_N,
+           (unsigned)zi, rc, (unsigned)rms);
+    DebugUartUnlock();
+
+    BSP_I2C_UI_Lock();
+    wmain = (uint8_t)((BSP_I2C_UI_Probe(s_addr) == 0) ? 1u : 0u);
+    alt60 = (uint8_t)((BSP_I2C_UI_Probe(0x60u) == 0) ? 1u : 0u);
+    alt35 = (uint8_t)((BSP_I2C_UI_Probe(0x35u) == 0) ? 1u : 0u);
+    alt36 = (uint8_t)((BSP_I2C_UI_Probe(0x36u) == 0) ? 1u : 0u);
+    BSP_I2C_UI_Unlock();
+    rmain = (uint8_t)((atecc_readprobe(s_addr) == 0) ? 1u : 0u);   /* 自带锁 */
+    DebugUartLock();
+    printf("[ATECC] probe W:0x%02X=%s R:0x%02X=%s | W:0x60=%s 0x35=%s 0x36=%s\r\n",
+           (unsigned)s_addr, wmain ? "ACK" : "NACK",
+           (unsigned)s_addr, rmain ? "ACK" : "NACK",
+           alt60 ? "ACK" : "NACK", alt35 ? "ACK" : "NACK", alt36 ? "ACK" : "NACK");
+    DebugUartUnlock();
+
+    if (wmain != 0u && rmain == 0u) {
+        rc = DSO_Atecc608b_InfoRevision(rev);
+        DebugUartLock();
+        printf("[ATECC] Info rc=%d st=0x%02X rev=%02X%02X%02X%02X %s\r\n",
+               rc, (unsigned)DSO_Atecc608b_LastStatus(),
+               (unsigned)rev[0], (unsigned)rev[1],
+               (unsigned)rev[2], (unsigned)rev[3],
+               (rc == 0 && rev[2] == 0x60u) ? "<ATECC608B>" : "(rev?)");
+        DebugUartUnlock();
+        if (rc == 0) {
+            /* Config 区 4×32B 全区 dump（偏移语义按 ATECC608 存储器映射核对） */
+            uint8_t blk;
+            uint8_t i;
+            char line[128];   /* "[ATECC] cfgXX:" + 32×" XX" + CRLF + NUL = 113 */
+            int n;
+            for (blk = 0u; blk < 4u; blk++) {
+                if (DSO_Atecc608b_ReadConfig32(blk, &cfg[blk * 32u]) != 0) {
+                    rc = -1;
+                    break;
+                }
+            }
+            if (rc != 0) {
+                DebugUartLock();
+                printf("[ATECC] config read failed rc=%d\r\n", rc);
+                DebugUartUnlock();
+            } else {
+                for (blk = 0u; blk < 4u; blk++) {
+                    n = sprintf(line, "[ATECC] cfg%02X:", (unsigned)(blk * 32u));
+                    for (i = 0u; i < 32u; i++) {
+                        n += sprintf(line + n, " %02X", cfg[blk * 32u + i]);
+                    }
+                    sprintf(line + n, "\r\n");
+                    DebugUartLock();
+                    printf("%s", line);
+                    DebugUartUnlock();
+                }
+                DebugUartLock();
+                printf("[ATECC] sn9=%02X%02X%02X%02X%02X%02X%02X%02X%02X "
+                       "rev@08=%02X lockval@56=%02X lockcfg@57=%02X slotlock@58=%02X%02X\r\n",
+                       cfg[0x00], cfg[0x01], cfg[0x02], cfg[0x03],
+                       cfg[0x04], cfg[0x05], cfg[0x06], cfg[0x07],
+                       cfg[ATECC_CFG_SN8_OFF], cfg[ATECC_CFG_REV_OFF],
+                       cfg[ATECC_CFG_LOCK_VALUE_OFF], cfg[ATECC_CFG_LOCK_CONFIG_OFF],
+                       cfg[ATECC_CFG_SLOT_LOCKED_OFF],
+                       cfg[ATECC_CFG_SLOT_LOCKED_OFF + 1u]);
+                printf("[ATECC] present=1 addr=0x%02X\r\n", (unsigned)s_addr);
+                DebugUartUnlock();
             }
         }
-        printf("[ATECC] scl toggle done\r\n");
-        printf("[ATECC] wake-diag 0x60:");
-        for (k = 0u; k < (uint8_t)(sizeof(wus) / sizeof(wus[0])); k++) {
-            int wp;
-            BSP_I2C_UI_WakePulseUs(wus[k]);
-            vTaskDelay(pdMS_TO_TICKS(25u));
-            BSP_I2C_UI_Lock();
-            wp = BSP_I2C_UI_Probe(0x60u);
-            BSP_I2C_UI_Unlock();
-            printf(" w=%lu:wr=%d", (unsigned long)wus[k], wp);
-            if (wp == 0) {
-                s_addr = 0x60u;
-                rc = DSO_Atecc608b_InfoRevision(rev);
-                printf(" info=%d st=0x%02X", rc, (unsigned)DSO_Atecc608b_LastStatus());
-            }
-        }
-        printf("\r\n");
-    }
-    /* 0x7C 逐字节诊断（0x7C=7bit 0x3E，总线唯一"命令型"未知器件）：
-     *  word 判别：ATECC 只 ACK word 0x03，其他 word（如 0x00）该字节 NACK；
-     *             普通寄存器型/EEPROM 器件对任意 word 都 ACK → 一测便知。
-     *  Info 帧逐字节 ACK 图：定位 NACK 落在第几个字节（CRC 尾 NACK = 命令被拒/格式错）。 */
-    {
-        uint8_t b;
-        int r;
-        uint8_t cmd[7];
-        uint8_t frame[8];
-        uint8_t al[16];
-        uint16_t c;
-        uint8_t i;
-        static const uint8_t w0[1] = { 0x00u };
-        static const uint8_t w3[1] = { DSO_ATECC608B_WORD_CMD };
-
-        printf("[ATECC7C] byte-diag start\r\n");
-        BSP_I2C_UI_WakePulse();
-        vTaskDelay(pdMS_TO_TICKS(25u));
-
-        BSP_I2C_UI_Lock();
-        r = BSP_I2C_UI_DiagTxBytes(0x7Cu, w0, 1u, al);
-        BSP_I2C_UI_Unlock();
-        printf("[ATECC7C] word=0x00: addr=%s data=%s\r\n",
-               (r == 0) ? "ACK" : "NACK", al[1] ? "ACK" : "NACK");
-
-        BSP_I2C_UI_Lock();
-        r = BSP_I2C_UI_DiagTxBytes(0x7Cu, w3, 1u, al);
-        BSP_I2C_UI_Unlock();
-        printf("[ATECC7C] word=0x03: addr=%s data=%s\r\n",
-               (r == 0) ? "ACK" : "NACK", al[1] ? "ACK" : "NACK");
-
-        cmd[0] = 0x07u; cmd[1] = 0x30u; cmd[2] = 0x00u;
-        cmd[3] = 0x00u; cmd[4] = 0x00u;
-        c = atecc_crc16(cmd, 5u);
-        cmd[5] = (uint8_t)(c & 0xFFu);
-        cmd[6] = (uint8_t)(c >> 8);
-        frame[0] = DSO_ATECC608B_WORD_CMD;
-        for (i = 0u; i < 7u; i++) {
-            frame[1u + i] = cmd[i];
-        }
-        BSP_I2C_UI_Lock();
-        r = BSP_I2C_UI_DiagTxBytes(0x7Cu, frame, 8u, al);
-        BSP_I2C_UI_Unlock();
-        printf("[ATECC7C] info crc=0x%04X addr=%s ack=", (unsigned)c,
-               (r == 0) ? "ACK" : "NACK");
-        for (i = 0u; i < 8u; i++) {
-            printf("%s", al[1u + i] ? "A" : "N");
-        }
-        printf("  <- [03 07 30 00 00 00 %02X %02X]\r\n",
-               (unsigned)cmd[5], (unsigned)cmd[6]);
-
-        r = -1;
-        for (i = 0u; i < 30u; i++) {
-            BSP_I2C_UI_Lock();
-            r = BSP_I2C_UI_ReadRaw(0x7Cu, &b, 1u);
-            BSP_I2C_UI_Unlock();
-            if (r == 0) {
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(1u));
-        }
-        if (r == 0) {
-            printf("[ATECC7C] read ok first=0x%02X @%ums\r\n",
-                   (unsigned)b, (unsigned)(i + 1u));
-        } else {
-            printf("[ATECC7C] read timeout (30ms)\r\n");
-        }
-    }
-
-    /* 极慢速重放（位延迟 30µs ≈ 10kHz）：排除软件 I2C 采样过早把器件慢 ACK
-     * 误判 NACK。若慢速下 word=0x03/Info 恢复 ACK 或有响应 → 位时序问题，
-     * 修 bsp_i2c_ui 采样即可（也解释"换板依旧"）。诊断结束恢复默认 2µs。 */
-    {
-        uint8_t b;
-        int r;
-        uint8_t cmd[7];
-        uint8_t frame[8];
-        uint8_t al[16];
-        uint16_t c;
-        uint8_t i;
-        uint8_t p60;
-
-        BSP_I2C_UI_SetBitDelayUs(30u);
-        BSP_I2C_UI_WakePulse();
-        vTaskDelay(pdMS_TO_TICKS(25u));
-
-        BSP_I2C_UI_Lock();
-        p60 = (BSP_I2C_UI_Probe(0x60u) == 0) ? 1u : 0u;
-        BSP_I2C_UI_Unlock();
-        printf("[ATECC] slow 0x60 addr=%s\r\n", p60 ? "ACK" : "NACK");
-
-        cmd[0] = 0x07u; cmd[1] = 0x30u; cmd[2] = 0x00u;
-        cmd[3] = 0x00u; cmd[4] = 0x00u;
-        c = atecc_crc16(cmd, 5u);
-        cmd[5] = (uint8_t)(c & 0xFFu);
-        cmd[6] = (uint8_t)(c >> 8);
-        frame[0] = DSO_ATECC608B_WORD_CMD;
-        for (i = 0u; i < 7u; i++) {
-            frame[1u + i] = cmd[i];
-        }
-        BSP_I2C_UI_Lock();
-        r = BSP_I2C_UI_DiagTxBytes(0x7Cu, frame, 8u, al);
-        BSP_I2C_UI_Unlock();
-        printf("[ATECC7C] slow-info addr=%s ack=", (r == 0) ? "ACK" : "NACK");
-        for (i = 0u; i < 8u; i++) {
-            printf("%s", al[1u + i] ? "A" : "N");
-        }
-        printf("  crc=0x%04X\r\n", (unsigned)c);
-
-        r = -1;
-        for (i = 0u; i < 30u; i++) {
-            BSP_I2C_UI_Lock();
-            r = BSP_I2C_UI_ReadRaw(0x7Cu, &b, 1u);
-            BSP_I2C_UI_Unlock();
-            if (r == 0) {
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(1u));
-        }
-        BSP_I2C_UI_SetBitDelayUs(0u);   /* 恢复默认，勿影响同总线器件 */
-        if (r == 0) {
-            printf("[ATECC7C] slow read ok first=0x%02X\r\n", (unsigned)b);
-        } else {
-            printf("[ATECC7C] slow read timeout (30ms)\r\n");
-        }
-    }
-    /* 唤醒是总线级的（与芯片地址无关）：醒后全地址重扫，芯片必在某一地址 ACK */
-    printf("[ATECC] post-wake rescan:\r\n");
-    atecc608b_scan_addrs();
-    printf("[ATECC] probe candidates 0x60/0x7C/0x50/0x64/0x68/0x6A (R=nack only, eeprom-safe)\r\n");
-
-    if (DSO_Atecc608b_Probe() != 0) {
-        printf("[ATECC] present=0 (no chip / addr / wake)\r\n");
-        vTaskDelete(NULL);
-        return;
-    }
-    printf("[ATECC] present=1 at addr=0x%02X\r\n", (unsigned)s_addr);
-    (void)DSO_Atecc608b_InfoRevision(rev);
-    rc  = DSO_Atecc608b_ReadConfig32(0u, cfg0);   /* 0x15 锁状态 */
-    rc |= DSO_Atecc608b_ReadConfig32(2u, cfg2);   /* 0x44 锁状态 */
-    if (rc != 0) {
-        printf("[ATECC] config read rc=%d\r\n", rc);
     } else {
-        /* serial4 = 序列号前 4 字节；锁状态字节 hex（0x55/0xCC 语义联调核对） */
-        printf("[ATECC] rev=%02X%02X%02X%02X\r\n",
-               rev[0], rev[1], rev[2], rev[3]);
-        printf("[ATECC] serial4=%02X%02X%02X%02X\r\n",
-               cfg0[0], cfg0[1], cfg0[2], cfg0[3]);
-        printf("[ATECC] lock_value@0x15=0x%02X lock_config@0x44=0x%02X\r\n",
-               cfg0[ATECC_CFG_LOCK_VALUE_OFF],       /* 0x15 ∈ block0 */
-               cfg2[ATECC_CFG_LOCK_CONFIG_OFF - 0x40u]);  /* 0x44 ∈ block2 */
+        atecc608b_fallback_diag();
     }
-    printf("[ATECC] probe done\r\n");
+    /* 旧 0x7C 逐字节诊断已移除：其前提（"ATECC 只 ACK word 0x03"）不成立
+     * （ATECC 对写字节一律 ACK），结论不可靠，且已由上面的 0x35 规范流程取代。 */
+
+    BSP_I2C_UI_SetBitDelayUs(0u);   /* 恢复默认位延迟（同总线其它器件用） */
     vTaskDelete(NULL);
 }
 

@@ -153,6 +153,9 @@ void BSP_I2C_UI_Init(void)
  * 用于排除"主控采样过早把器件慢 ACK 误判 NACK"。影响全总线，用完必须设回 0。 */
 void BSP_I2C_UI_SetBitDelayUs(uint32_t us)
 {
+    if (us > 1000u) {   /* 防诊断误设把整条总线拖死 */
+        us = 1000u;
+    }
     s_bit_delay_us = us;
 }
 
@@ -193,6 +196,38 @@ void BSP_I2C_UI_WakePulseUs(uint32_t low_us)
 void BSP_I2C_UI_WakePulse(void)
 {
     BSP_I2C_UI_WakePulseUs(100u);
+}
+
+/* ATECC608B Wake（规范 0x00 字节法）：以 ≤100kHz 连发 n 个 0x00 字节。
+ * 关键：默认位延迟 2µs 时一个 0x00 字节只产生 ≈39µs 低电平 < tWLO 60µs，
+ * 必然唤不醒；故这里强制 5µs 半周期（≈93kHz，1 字节 SDA 低 ≈86µs），
+ * 并在返回前恢复原值——调用方无需感知速率。 */
+int BSP_I2C_UI_WakeZeroBytes(uint8_t n)
+{
+    uint32_t saved = s_bit_delay_us;
+    uint8_t i;
+    int acked = 0;
+
+    if (n == 0u) {
+        n = 1u;
+    }
+    if (n > 4u) {
+        n = 4u;
+    }
+
+    s_bit_delay_us = I2C_UI_SLOW_HALF_DELAY_US;
+
+    i2c_start();
+    for (i = 0u; i < n; i++) {
+        i2c_send_byte(0x00u);            /* 8 位全 0 → SDA 连续低 ≈86µs */
+        if (i2c_wait_ack() == 0u) {      /* 0x00 无人应答才正常 */
+            acked = 1;
+        }
+    }
+    i2c_stop();
+
+    s_bit_delay_us = saved;              /* 恢复（默认 2µs ≈200kHz） */
+    return acked;
 }
 
 /* 诊断：持续拉低 SDA 约 ms 毫秒（阻塞）。用于万用表实测芯片 SDA 脚电平。 */

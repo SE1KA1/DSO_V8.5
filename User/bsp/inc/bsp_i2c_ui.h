@@ -33,6 +33,19 @@ void BSP_I2C_UI_WakePulse(void);
 /** 参数化唤醒：SDA 拉低 low_us µs（钳位 60..20000）后释放并等 2ms。 */
 void BSP_I2C_UI_WakePulseUs(uint32_t low_us);
 
+/** 100kHz 标准模式半周期（bsp_DelayUS(5) 实测 ≈5.3µs → 位周期 ≈10.7µs ≈ 93kHz） */
+#define I2C_UI_SLOW_HALF_DELAY_US   5u
+
+/**
+ * ATECC608B Wake（规范 0x00 字节法）：以 ≤100kHz 连发 n 个 0x00 字节
+ * （START + 0x00… + STOP，逐字节忽略 NACK），SDA 连续低 ≈ n×86µs ≥ tWLO 60µs，
+ * 释放后 SDA 上升沿唤醒芯片。函数内部临时把位延迟强制为 100kHz、返回前恢复，
+ * 故调用方无需（也不会忘记）降速。睡眠中器件忽略 SCL，无需额外控制。
+ * @param n 0x00 字节数（钳位 1..4）；推荐 3
+ * @return 0=正常（无器件应答 0x00）；1=有器件 ACK 0x00（总线存在应答通用呼叫的器件）
+ */
+int BSP_I2C_UI_WakeZeroBytes(uint8_t n);
+
 /** 诊断：持续拉低 SDA 约 ms 毫秒（阻塞），供万用表实测芯片 SDA 脚电平。 */
 void BSP_I2C_UI_SdaLowMs(uint32_t ms);
 

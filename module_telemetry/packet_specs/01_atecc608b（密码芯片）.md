@@ -4,8 +4,9 @@
 
 | 项 | 值 |
 |---|---|
-| 器件 | Microchip ATECC608B-SSHDA-T（I2C 加密认证芯片，ECDSA/AES/SHA） |
-| I2C 7 位地址 | **0x60**（SDA=PB7, SCL=PB8，与 PCAL6524/SHT40/INA226 共用软件 I2C 总线） |
+| 器件 | Microchip **ATECC608B-SSHDA-T**（I2C 加密认证芯片，ECDSA/AES/SHA） |
+| I2C 7 位地址 | **0x60**（总线写字节 0xC0 / 读字节 0xC1；SDA=PB7, SCL=PB8，与 PCAL6524/SHT40/INA226 共用软件 I2C 总线）。TNGTLS 定制版为 0x35/0x36，已列入探测候选 |
+| 唤醒时序 | 上电 ≥20ms 才可动 I2C；必须先 Wake（≤100kHz 发 0x00 使 SDA 低 ≥60µs，释放后等 ≥1.5ms）再访问 7-bit 地址——**未 Wake 时芯片在 Sleep，对地址一律 NACK** |
 | 用途 | ①用户安全身份识别登录（挑战-签名认证）；②恶意防篡改（芯片锁状态/通信异常/校验失败事件上报） |
 
 > 驱动层（I2C 命令/状态机）尚在开发：本轮交付数据包格式与参考实现；`present/comm_ok` 等为设备侧真实采集结果，联调时填充。

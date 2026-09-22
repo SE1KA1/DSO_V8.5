@@ -9,8 +9,9 @@
  *
  * 构建开关：MODULE_TEL_ATECC_ENABLE=1 时才包含 FreeRTOS 与任务（骨架默认 0，
  * 便于在 DSO 树外独立阅读/静态检查）。接入时置 1 并：
- *  1) atecc608b_collect_status() 内接真实驱动（I2C 0x60，PB7/PB8 总线，
- *     与 PCAL6524/SHT40/INA226 共用 BSP_I2C_UI 互斥锁）
+ *  1) atecc608b_collect_status() 内接真实驱动（I2C 7-bit 0x60，PB7/PB8 总线，
+ *     与 PCAL6524/SHT40/INA226 共用 BSP_I2C_UI 互斥锁；访问前须先按 ATECC608
+ *     规范 Wake：≤100kHz 发 0x00 使 SDA 低 ≥60µs → 等 ≥1.5ms）
  *  2) mtel_send() 接入 dso_fmc_telemetry 的 TCP 发送路径（module_telemetry.h）
  *  3) 本文件加入 Keil 工程（Project→Manage→Project Items）
  */
@@ -22,7 +23,7 @@
 #define MODULE_TEL_ATECC_ENABLE 0
 #endif
 
-#define ATECC608B_I2C_ADDR  0x60u   /* 7 位地址（PB7/PB8 总线） */
+#define ATECC608B_I2C_ADDR  0x60u   /* 7 位地址（SSHDA-T 默认；总线字节 W=0xC0/R=0xC1，PB7/PB8 总线） */
 #define ATECC608B_POLL_MS   1000u
 
 #if MODULE_TEL_ATECC_ENABLE
@@ -36,7 +37,7 @@
 static int atecc608b_collect_status(char *json, size_t sz)
 {
     /* TODO：真实驱动就绪后填充——
-     *   present   = (BSP_I2C_UI_Probe(0x60) == 0)
+     *   present   = (先 Wake，再 BSP_I2C_UI_Probe(0x60) == 0)
      *   comm_ok   = 最近读成功
      *   chip_info = 读 Config zone：序列号前 4B hex、part、rev、lock_config/lock_data
      *   login_state / fail_cnt 由上层登录状态机维护
