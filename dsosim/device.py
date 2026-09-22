@@ -293,9 +293,10 @@ class DSOSimulator:
             elif cmd == "get_config":
                 pass  # no-op, config is exposed via read_frame()
             elif cmd == "reboot":
-                if self.state not in ("CONFIG", "RECOVERY"):
-                    ack.result = "error"
-                    ack.error = "reboot requires CONFIG/RECOVERY state"
+                # GUI 复位键（软复位）。真机为 NVIC_SystemReset；模拟器不做状态守卫
+                # 限制（原实现要求 CONFIG/RECOVERY，离线联调时不便），回显 mode 即可。
+                mode = params.get("mode", "soft") if params else "soft"
+                ack.data = {"mode": mode}
             else:
                 ack.result = "error"
                 ack.error = f"unknown cmd {cmd}"

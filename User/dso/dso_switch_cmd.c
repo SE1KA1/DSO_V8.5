@@ -21,6 +21,7 @@
 #include "dso_sht40.h"
 #include "dso_ina226.h"
 #include "dso_ina226_u44.h"
+#include "dso_watchdog.h"     /* 远程复位入口 DSO_Watchdog_RequestReboot */
 #include "bsp.h"              /* stm32h7xx_hal + bsp_uart_fifo（提供 USART_TypeDef/__IO 前置） */
 #include "lwip/netif.h"
 #include "debug_uart_lock.h"
@@ -39,7 +40,15 @@ static volatile uint8_t s_buzzer_mute = 0;         /* 1=静音（蜂鸣器完全
 static const char *json_find_key(const char *line, const char *key)
 {
     char pat[32];
-//    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    if (line == NULL || key == NULL) {
+        return NULL;
+    }
+    /* 必须真的构造出 "\"key\"" 再搜索：pat 若保持未初始化，strstr 用的是栈垃圾，
+     * 解析结果随机（曾导致 get_switch/set_sw 时好时坏 → GUI "no reply"）。 */
+    if (strlen(key) + 3u > sizeof(pat)) {
+        return NULL;
+    }
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
     return strstr(line, pat);
 }
 
@@ -166,6 +175,21 @@ int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
                  (unsigned)DSO_Sht40_IsValid(),
                  (unsigned)eth_l, (unsigned)usb_a,
                  (unsigned)DSO_Switch_BuzzerMute());
+        return 1;
+    }
+
+    if (strcmp(cmd, "reboot") == 0) {
+        /* 远程复位（GUI 复位键）：本函数只置"待复位"标志，真正的软复位由喂狗任务
+         * 延迟 ~300ms 执行——因为 TCP 回发发生在本函数返回之后，若在此直接复位，
+         * ack 将永远发不出去。
+         * params.mode 当前仅支持 "soft"；"hard"（停喂狗 → SP706T 拉低 NRST，
+         * 真硬件复位）留作后续钩子。 */
+        DSO_Watchdog_RequestReboot();
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"reboot\",\"result\":\"ok\",\"error\":\"\","
+                 "\"data\":{\"mode\":\"soft\"}}",
+                 seq);
         return 1;
     }
 

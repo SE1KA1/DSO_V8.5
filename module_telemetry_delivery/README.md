@@ -27,7 +27,7 @@ module_telemetry_delivery/
 | # | 模块 | 硬件/引脚 | 周期 | 状态 |
 |---|---|---|---|---|
 | 2 | PCAL6524：13 开关 + 5 LED(YDS1-5) | I2C 0x22 | 1s | ✅ 已上线（sw/yds/eth/usb + 声光联动） |
-| 3 | SHT40 温湿度 | I2C 0x44 | 1s | ✅ 已上线（temp/level + sensor_lost） |
+| 3 | SHT40 温湿度 | I2C 0x44 | 1s | ✅ 已上线（temp_dezi + rh_centi 温湿度 + level + sensor_lost） |
 | 4 | U10-INA226 过桥板电流 | I2C 0x41 / 100mΩ | 1s | ✅ 已上线（cur_ma/level + overcurrent 事件） |
 | 5 | U44-INA226 核心板电流 | I2C 0x40 / 20mΩ | 1s | ✅ 已上线（cur_ma/level） |
 | 6 | BGM_ADC_DAC 采样读数 | DSO 采样 | 1s | ✅ 已上线（频率计快照 + 采样态） |
@@ -39,7 +39,7 @@ module_telemetry_delivery/
 - **等级 `level`**（0..3，各模块 data 内）：0 正常 / 1 预警 / 2 告警 / 3 紧急。
 - **硬件灯**：电流报警红 YDS1、电流正常绿 YDS2、温度正常蓝 YDS3、温度报警橙 YDS4、USB 通讯青 YDS5（闪烁档见 02）。
 - **蜂鸣器**：等级 = max(两路电流, 温度)，按档节奏响；**GUI `set_buzzer {on:1}` 静音**（LED 不受影响）。
-- **最新电流阈值（实测标定）**：U10 额定 35mA → 预警 29.75 / 告警 35 / 紧急 52.5 mA；U44 额定 135mA → 预警 115 / 告警 135 / 紧急 202.5 mA。温度：预警 58 / 告警 60 / 紧急 65 ℃。调整需同步固件宏（dso_ina226.h / dso_ina226_u44.h / dso_sht40.h）。
+- **最新电流阈值（实测标定）**：U10 额定 35mA → 预警 29.75 / 告警 35 / 紧急 52.5 mA；U44 额定 160mA → 预警 136 / 告警 160 / 紧急 240 mA。温度：预警 58 / 告警 60 / 紧急 65 ℃。调整需同步固件宏（dso_ina226.h / dso_ina226_u44.h / dso_sht40.h）。
 
 ## 给后端同事的接入指引
 
@@ -58,14 +58,14 @@ module_telemetry_delivery/
 
 ## 给前端同事的接入指引
 
-- 温度：模块 3 `temp_dezi`（÷10 得 ℃）+ `temp_ok`；状态色建议按 `level`：0 正常/蓝、1 预警/黄、2 告警/橙、3 紧急/红。
+- 温湿度：模块 3 `temp_dezi`（÷10 得 ℃）+ `rh_centi`（÷100 得 %RH）+ `temp_ok`；状态色建议按 `level`：0 正常/蓝、1 预警/黄、2 告警/橙、3 紧急/红。
 - 电流：模块 4/5 `cur_ma` + `level`，红色告警 = 两路最高级；数值与阈值见上表（供范围/颜色映射）。
 - 下行控制（开关/静音）走 **GUI 独立 TCP/串口通道**（`pc_switch_panel`，get_switch/set_sw/set_buzzer），不在本上行遥测包内，另见《STM32 与服务器设备协议 v1.0》。
 
 ## 帧速览
 
 ```json
-{"ver":"1.0","type":"module.data","module":"sht40","seq":10,"ts_ms":1500000,"data":{"temp_dezi":245,"temp_ok":1,"hi_alarm":0,"level":0}}
+{"ver":"1.0","type":"module.data","module":"sht40","seq":10,"ts_ms":1500000,"data":{"temp_dezi":245,"rh_centi":4523,"temp_ok":1,"hi_alarm":0,"level":0}}
 {"ver":"1.0","type":"module.data","module":"ina226_u10","seq":20,"ts_ms":2100000,"data":{"cur_ma":12,"over_cur":0,"valid":1,"level":0}}
 {"ver":"1.0","type":"module.data","module":"pcal6524","seq":30,"ts_ms":3300000,"data":{"sw":16382,"yds":17,"eth_link":1,"usb_active":0}}
 ```

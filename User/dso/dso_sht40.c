@@ -3,7 +3,8 @@
  * @brief SHT40-AD1B-R2 温度读取（软件 I2C BSP_I2C_UI，PB7/PB8，与 PCAL6524 同总线）。
  *
  * 协议：发 0xFD（高精度）→ 等 15ms → 读 6 字节 [Tmsb,Tlsb,Tcrc,RHmsb,RHlsb,RHcrc]。
- * 温度 = -45 + 175 * raw/65535（℃）。CRC-8 poly 0x31 init 0xFF（Sensirion）。
+ * 温度 = -45 + 175 * raw/65535（℃）；湿度 = -6 + 125 * raw/65535（%RH，钳位 0..100）。
+ * CRC-8 poly 0x31 init 0xFF（Sensirion）。
  *
  * 总线互斥：命令与读取都持锁，但 15ms 等待在锁外（其他器件可用总线）。
  * 失败静默累计；从有效→失效（>10 连败）与首次成功各打印一次诊断，防刷屏。
@@ -14,8 +15,9 @@
 #include "task.h"
 #include <stdio.h>
 
-/* 缓存：百分之一 ℃；0 仅表示"尚未成功"（配合 s_valid 判读） */
+/* 缓存：百分之一 ℃ / 百分之一 %RH；0 仅表示"尚未成功"（配合 s_valid 判读） */
 static int32_t s_temp_centi = 0;
+static int32_t s_rh_centi = 0;      /* 相对湿度 ×100（0..10000 = 0..100.00 %RH） */
 static uint8_t s_valid = 0;       /* 1=最近有效 */
 static uint8_t s_fail_streak = 0;
 static uint8_t s_reported_invalid = 0;   /* 已打印过"失效"诊断（防刷屏） */
@@ -72,14 +74,25 @@ static void sht40_measure_once(void)
         /* T[°C] = -45 + 175 * raw/65535；整数四舍五入到百分之一 ℃ */
         int64_t raw = (int64_t)buf[0] << 8 | buf[1];
         int32_t centi = -4500 + (int32_t)(((int64_t)17500 * raw + 32767) / 65535);
+        /* RH[%] = -6 + 125 * raw/65535；四舍五入到百分之一 %，并按器件规格钳位 0..100% */
+        int64_t raw_rh = (int64_t)buf[3] << 8 | buf[4];
+        int32_t rh = -600 + (int32_t)(((int64_t)12500 * raw_rh + 32767) / 65535);
+
+        if (rh < 0) {
+            rh = 0;
+        } else if (rh > 10000) {
+            rh = 10000;
+        }
 
         s_temp_centi = centi;
+        s_rh_centi = rh;
         s_valid = 1u;
         s_fail_streak = 0u;
         if (!s_reported_first_ok) {
             s_reported_first_ok = 1u;
-            printf("[SHT40] first ok temp=%d.%02dC\r\n",
-                   (int)(centi / 100), (int)(centi % 100));
+            printf("[SHT40] first ok temp=%d.%02dC rh=%d.%02d%%\r\n",
+                   (int)(centi / 100), (int)(centi % 100),
+                   (int)(rh / 100), (int)(rh % 100));
         }
     }
     return;
@@ -125,6 +138,11 @@ int32_t DSO_Sht40_GetTempDezi(void)
 uint8_t DSO_Sht40_IsValid(void)
 {
     return s_valid;
+}
+
+int32_t DSO_Sht40_GetRhCenti(void)
+{
+    return s_rh_centi;
 }
 
 uint8_t DSO_Sht40_HiAlarm(void)

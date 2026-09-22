@@ -167,7 +167,7 @@
 | `set_mode` | `{mode}` | 远程切模式 | FMC16 完整板（**当前位流未开放 → NOT_SUPPORTED**） |
 | `set_clk_select` | `{profile}` | 远程切时钟 | 同上（未开放 → NOT_SUPPORTED） |
 | `pi_control` | `{mask, value, expectedGen, newGen}` | 提交 PI 已应用镜像 | FMC16 `IO_CONTROL`（完整板） |
-| `reboot` | `{}` | 软件复位 | `NVIC_SystemReset()`（需 CONFIG/RECOVERY 态） |
+| `reboot` | `{mode?}` | 软件复位（`mode:"soft"`，默认） | **已实现**：GUI 通道（TCP 5005 `{"cmd":"reboot","params":{"mode":"soft"}}`）→ `DSO_Watchdog_RequestReboot()` → 喂狗任务延迟 ~300ms（让 ack 先发出）→ `NVIC_SystemReset()`；复位原因位 SFTRSTF。`mode:"hard"`（停喂狗→SP706T 拉低 NRST，真硬件复位）为后续钩子 |
 
 ## 5. 状态机（连接/租约）
 

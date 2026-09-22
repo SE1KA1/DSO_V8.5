@@ -20,8 +20,9 @@ import time
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication, QComboBox, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QMainWindow, QPlainTextEdit,
-                               QPushButton, QStatusBar, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QMainWindow, QMessageBox,
+                               QPlainTextEdit, QPushButton, QStatusBar,
+                               QVBoxLayout, QWidget)
 
 from serial_transport import SerialTransport, discover_ch340
 from transport import SwitchTransport
@@ -68,6 +69,12 @@ class MainWindow(QMainWindow):
         self._ack_timer = QTimer(self)
         self._ack_timer.setInterval(4)
         self._ack_timer.timeout.connect(self._drain_acks)
+
+        # 远程复位（Reset 键）后的自动重连：2s 一次尝试，窗口期见 _start_auto_reconnect
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setInterval(2000)
+        self._reconnect_timer.timeout.connect(self._try_reconnect)
+        self._reconnect_until = 0.0
 
     # ---- UI ---------------------------------------------------------------
 
@@ -125,6 +132,13 @@ class MainWindow(QMainWindow):
         self._btn_disc.clicked.connect(self._on_disconnect)
         self._btn_disc.setEnabled(False)
         bar.addWidget(self._btn_disc)
+
+        # 远程复位键：等效按下核心板复位键（软件复位），点击后自动重连
+        self._btn_reset = QPushButton("Reset")
+        self._btn_reset.setToolTip("远程复位核心板（软件复位，等效按复位键）")
+        self._btn_reset.clicked.connect(self._on_reset_clicked)
+        self._btn_reset.setEnabled(False)
+        bar.addWidget(self._btn_reset)
         bar.addStretch(1)
         root.addLayout(bar)
         self._on_link_changed(self._link.currentText())
@@ -223,6 +237,13 @@ class MainWindow(QMainWindow):
         return SerialTransport()
 
     def _on_connect(self) -> None:
+        self._connect_current(silent=False)
+
+    def _connect_current(self, silent: bool = False) -> bool:
+        """按当前 Link 选择建立连接并启动轮询；silent=True 供自动重连复用。
+
+        @return 连接是否成功。
+        """
         t = self._new_transport()
         if self._link.currentText() == "TCP":
             host = self._host.text().strip() or DEFAULT_HOST
@@ -230,7 +251,7 @@ class MainWindow(QMainWindow):
                 port = int(self._port.text().strip())
             except ValueError:
                 self._set_status("invalid port")
-                return
+                return False
             ok = t.connect(host, port)
             label = f"{host}:{port}"
         else:
@@ -239,23 +260,28 @@ class MainWindow(QMainWindow):
                 baud = int(self._baud.text().strip())
             except ValueError:
                 self._set_status("invalid baud")
-                return
+                return False
             ok = t.connect(com, baud)
             label = f"{com}@{baud}"
         self._transport.close()
         self._transport = t
         if ok:
+            if not silent:
+                self._append_log(f"connected to {label}")
             self._set_status(f"connected to {label}")
-            self._append_log(f"connected to {label}")
             self._btn_conn.setEnabled(False)
             self._btn_disc.setEnabled(True)
+            self._btn_reset.setEnabled(True)
             self._poll.start()
             self._poll_state()
         else:
+            if not silent:
+                self._append_log(f"connect to {label} FAILED")
             self._set_status(f"connect to {label} failed")
-            self._append_log(f"connect to {label} FAILED")
+        return ok
 
     def _on_disconnect(self) -> None:
+        self._reconnect_timer.stop()
         self._transport.close()
         self._poll.stop()
         self._ack_timer.stop()
@@ -263,7 +289,56 @@ class MainWindow(QMainWindow):
         self._lat_win.clear()
         self._btn_conn.setEnabled(True)
         self._btn_disc.setEnabled(False)
+        self._btn_reset.setEnabled(False)
         self._set_status("disconnected")
+
+    # ---- 远程复位与自动重连 ------------------------------------------------
+
+    def _on_reset_clicked(self) -> None:
+        """Reset 键：二次确认后下发 reboot，并进入自动重连窗口。"""
+        if not self._transport.is_open:
+            return
+        ans = QMessageBox.question(
+            self, "远程复位",
+            "将远程复位核心板（软件复位，等效按下复位键）。\n"
+            "设备会短暂离线，并在数秒内自动重连。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        self._seq += 1
+        self._append_log(f"> reboot (soft) seq={self._seq}")
+        self._transport.send_cmd("reboot", {"mode": "soft"}, self._seq)
+        self._start_auto_reconnect(30.0)
+
+    def _start_auto_reconnect(self, seconds: float) -> None:
+        """开启自动重连窗口（设备复位期间轮询重连）。"""
+        self._reconnect_until = time.monotonic() + seconds
+        self._set_status("设备复位中，自动重连…")
+        self._append_log(f"[RESET] 等待设备重启（最多 {int(seconds)}s，自动重连）")
+        if not self._reconnect_timer.isActive():
+            self._reconnect_timer.start()
+
+    def _try_reconnect(self) -> None:
+        if time.monotonic() > self._reconnect_until:
+            self._reconnect_timer.stop()
+            self._set_status("重连超时 — 请手动 Connect")
+            self._append_log("[RESET] 自动重连超时，请手动连接")
+            return
+        if self._transport.is_open and self._transport.query_state(timeout=0.3) is not None:
+            # 设备已回来且旧连接仍可用
+            self._reconnect_timer.stop()
+            self._set_status("online")
+            self._append_log("[RESET] 设备已恢复（连接未断）")
+            return
+        self._transport.close()
+        self._poll.stop()
+        if self._connect_current(silent=True):
+            self._reconnect_timer.stop()
+            self._set_status("online")
+            self._append_log("[RESET] 设备已恢复，自动重连成功")
+        else:
+            self._set_status("设备复位中，自动重连…")
 
     def _on_mute_swipe(self, idx: int, on: int) -> None:
         """MUTE 滑块：左滑=on=静音。发 set_buzzer，状态由轮询收敛。"""
@@ -399,6 +474,7 @@ class MainWindow(QMainWindow):
         self._log.appendPlainText(f"[{ts}] {text}")
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt name)
+        self._reconnect_timer.stop()
         self._transport.close()
         super().closeEvent(event)
 

@@ -11,7 +11,7 @@ import socketserver
 import threading
 
 from .device import DSOSimulator
-from .protocol import ControlCommand
+from .protocol import AckFrame, ControlCommand
 
 
 class _Handler(socketserver.StreamRequestHandler):
@@ -33,8 +33,12 @@ class _Handler(socketserver.StreamRequestHandler):
                     self.wfile.write((ack.to_json() + "\r\n").encode("utf-8"))
                     self.wfile.flush()
                 except Exception as e:  # noqa: BLE001 - keep server alive on bad frame
-                    |
-                    self.wfile.write((resp % str(e)).encode("utf-8"))
+                    # 坏帧/解析失败：回一条 error ack，保持连接不中断
+                    bad = locals().get("cmd")
+                    ack = AckFrame(seq=getattr(bad, "seq", 0),
+                                   cmd=getattr(bad, "cmd", "?"),
+                                   result="error", error=str(e))
+                    self.wfile.write((ack.to_json() + "\r\n").encode("utf-8"))
                     self.wfile.flush()
         finally:
             self.server._client_connected = False

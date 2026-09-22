@@ -34,8 +34,13 @@
 
 （bit7=RMVF 复位标志清除位，正常为 0）
 
-## 3. 下行命令（远程恢复，骨架）
-- `reboot`（软件复位，需后端确认授权路径）——见服务器协议文档，联调定稿。
+## 3. 下行命令（远程恢复）
+- `reboot`（软件复位）——**已实现**（GUI 复位键，TCP 5005 简单 JSON 通道）：
+  `{"cmd":"reboot","params":{"mode":"soft"},"seq":N}` → ack 后由喂狗任务延迟 ~300ms
+  执行 `NVIC_SystemReset()`（先回 ack 再复位，避免应答丢失）；复位后
+  `reset_cause` 的 SFTRSTF 位置位。
+  - `mode:"hard"`（停喂狗 → SP706T 超时拉低 NRST，真硬件复位，~1.6s 生效）：留作后续钩子。
+  - `command.execute` 通道（服务器下发）的 reboot 尚未接（见 `dso_fmc_telemetry.c` 的 tel_handle_command），需要时再补。
 
 ## 4. 示例完整帧
 

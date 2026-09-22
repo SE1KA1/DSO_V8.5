@@ -2,8 +2,8 @@
  * @file dso_sht40.h
  * @brief 过桥�? SHT40-AD1B-R2 温湿度传感器驱动（软�? I2C，PB7=SDA/PB8=SCL，与 PCAL6524 同总线）�?
  *
- * 1s 周期读一次温度，缓存最新值供协议应答；温�? > DSO_SHT40_ALARM_HI_CENTI �?
- * 通过 DSO_Sht40_HiAlarm() 置位 LED3(bit2) ALARM�?
+ * 1s 周期读一次温湿度，缓存最新值供协议应答；温度 > DSO_SHT40_ALARM_HI_CENTI 时
+ * 通过 DSO_Sht40_HiAlarm() 置位 LED3(bit2) ALARM。湿度同帧读取并缓存，供上报使用。
  */
 #ifndef DSO_SHT40_H
 #define DSO_SHT40_H
@@ -44,9 +44,15 @@ extern "C" {
 void DSO_Sht40_Init(void);
 
 /**
- * 最新温度（十分之一 ℃，�? 245 = 24.5 ℃）。传感器从未成功时为 0�?
+ * 最新温度（十分之一 ℃，如 245 = 24.5 ℃）。传感器从未成功时为 0。
  */
 int32_t DSO_Sht40_GetTempDezi(void);
+
+/**
+ * 最新相对湿度（百分之一 %RH，如 4523 = 45.23 %RH）。已按器件规格钳位 0..100%。
+ * 传感器从未成功时为 0（配合 DSO_Sht40_IsValid() 判读有效性）。
+ */
+int32_t DSO_Sht40_GetRhCenti(void);
 
 /**
  * 传感器有效（最近一次读取成功且未超连续失败阈值）�?

@@ -213,14 +213,15 @@ static void mup_task(void *pv)
             continue;
         }
 
-        /* 模块 3：sht40 */
+        /* 模块 3：sht40（温度 + 湿度） */
         {
-            char js[160];
+            char js[192];
             uint8_t ok = DSO_Sht40_IsValid();
             snprintf(js, sizeof(js),
-                     "{\"temp_dezi\":%ld,\"temp_ok\":%u,\"hi_alarm\":%u,"
-                     "\"level\":%u}",
+                     "{\"temp_dezi\":%ld,\"rh_centi\":%ld,\"temp_ok\":%u,"
+                     "\"hi_alarm\":%u,\"level\":%u}",
                      (long)DSO_Sht40_GetTempDezi(),
+                     (long)DSO_Sht40_GetRhCenti(),
                      (unsigned)ok,
                      (unsigned)DSO_Sht40_HiAlarm(),
                      (unsigned)DSO_Sht40_GetLevel());

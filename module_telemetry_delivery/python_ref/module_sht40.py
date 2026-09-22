@@ -16,10 +16,11 @@ import envelope
 MODULE = "sht40"
 
 
-def data(temp_dezi: int, temp_ok: int = 1, hi_alarm: int = 0,
-         level: int = 0) -> dict:
-    return {"temp_dezi": int(temp_dezi), "temp_ok": int(temp_ok),
-            "hi_alarm": int(hi_alarm), "level": int(level)}
+def data(temp_dezi: int, rh_centi: int = 0, temp_ok: int = 1,
+         hi_alarm: int = 0, level: int = 0) -> dict:
+    return {"temp_dezi": int(temp_dezi), "rh_centi": int(rh_centi),
+            "temp_ok": int(temp_ok), "hi_alarm": int(hi_alarm),
+            "level": int(level)}
 
 
 def event_data(event: str, level: str = "warning", detail: str = "") -> dict:
@@ -33,6 +34,9 @@ def validate_data(d: dict) -> list[str]:
     t = d.get("temp_dezi")
     if not isinstance(t, int) or not (-4000 <= t <= 1250):
         errs.append(f"temp_dezi out of range: {t!r}")
+    rh = d.get("rh_centi")
+    if not isinstance(rh, int) or not (0 <= rh <= 10000):
+        errs.append(f"rh_centi out of range: {rh!r}")
     for k in ("temp_ok", "hi_alarm"):
         if d.get(k) not in (0, 1):
             errs.append(f"{k} must be 0/1")
@@ -73,12 +77,14 @@ def decode(line: str) -> dict:
 
 
 def _self_test() -> int:
-    l1 = make_frame("module.data", data(245), seq=10, ts_ms=1500000)
+    l1 = make_frame("module.data", data(245, rh_centi=4523), seq=10, ts_ms=1500000)
     assert decode(l1)["data"]["level"] == 0
     assert decode(l1)["data"]["temp_dezi"] == 245
+    assert decode(l1)["data"]["rh_centi"] == 4523
     l2 = make_frame("module.event", event_data("sensor_lost"), seq=11, ts_ms=1)
     assert decode(l2)["data"]["event"] == "sensor_lost"
-    for bad in (data(99999), data(245, temp_ok=2), event_data("mystery")):
+    for bad in (data(99999), data(245, rh_centi=10001), data(245, temp_ok=2),
+                event_data("mystery")):
         try:
             make_frame("module.data" if "temp_dezi" in bad else "module.event",
                        bad, seq=1, ts_ms=1)
