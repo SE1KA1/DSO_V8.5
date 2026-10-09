@@ -7,6 +7,7 @@
  */
 #include "bsp_i2c_ui.h"
 #include "bsp.h"          /* bsp_DelayUS, HAL_GPIO, __HAL_RCC */
+#include "stm32h7xx_hal.h" /* CoreDebug/DWT（唤醒脉冲实测用）、SystemCoreClock */
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"
@@ -24,6 +25,7 @@
 #define UI_SDA_1()   (I2C_UI_GPIO->BSRRL = (uint16_t)I2C_UI_SDA_PIN)
 #define UI_SDA_0()   (I2C_UI_GPIO->BSRRH = (uint16_t)I2C_UI_SDA_PIN)
 #define UI_SDA_READ()  (((I2C_UI_GPIO->IDR) & I2C_UI_SDA_PIN) != 0U)
+#define UI_SCL_READ()  (((I2C_UI_GPIO->IDR) & I2C_UI_SCL_PIN) != 0U)
 
 static SemaphoreHandle_t s_i2c_ui_mtx;
 static volatile uint32_t s_bit_delay_us = 0u;   /* 0=默认 2µs；诊断可临时调慢 */
@@ -91,14 +93,43 @@ static uint8_t i2c_read_byte(void)
     return v;
 }
 
+static volatile uint8_t s_ack_multisa = 0u;   /* ACK 多点采样档，默认关 */
+
+void BSP_I2C_UI_SetAckMultiSample(uint8_t on)
+{
+    s_ack_multisa = (on != 0u) ? 1u : 0u;
+}
+
 static uint8_t i2c_wait_ack(void)
 {
     uint8_t re;
+    uint8_t saw_low = 0u;
+    uint8_t k;
+    uint32_t step;
+
     UI_SDA_1();
     i2c_delay();
     UI_SCL_1();
-    i2c_delay();
-    re = UI_SDA_READ() ? 1U : 0U;
+    if (s_ack_multisa != 0u) {
+        /* 高电平期内多点采样：把半周期等分，任一次读到低即判 ACK。
+         * 用于 ATECC608B —— 实测它在 SCL 高电平期间拉低 SDA，但单点采样会漏读。 */
+        step = (s_bit_delay_us != 0u) ? s_bit_delay_us : 2u;
+        step /= I2C_UI_ACK_SAMPLES;
+        if (step < 1u) {
+            step = 1u;
+        }
+        for (k = 0u; k < I2C_UI_ACK_SAMPLES; k++) {
+            if (!UI_SDA_READ()) {
+                saw_low = 1u;
+                break;
+            }
+            bsp_DelayUS(step);
+        }
+        re = (saw_low != 0u) ? 0u : 1u;
+    } else {
+        i2c_delay();
+        re = UI_SDA_READ() ? 1U : 0U;
+    }
     UI_SCL_0();
     i2c_delay();
     return re;
@@ -159,6 +190,54 @@ void BSP_I2C_UI_SetBitDelayUs(uint32_t us)
     s_bit_delay_us = us;
 }
 
+uint32_t BSP_I2C_UI_GetBitDelayUs(void)
+{
+    return s_bit_delay_us;
+}
+
+/* ---- DWT 周期计数（仅诊断计时：实测唤醒低电平/位周期的真实 µs） ---- */
+
+static void ui_dwt_enable(void)
+{
+    /* 就地使能写法同 dso_freq_meter.c；只置 TRCENA/CYCCNTENA，不占外设 */
+    if ((CoreDebug->DEMCR & CoreDebug_DEMCR_TRCENA_Msk) == 0u) {
+        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    }
+    if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) == 0u) {
+        DWT->CYCCNT = 0u;
+        DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    }
+}
+
+static uint32_t ui_cyc_now(void)
+{
+    ui_dwt_enable();
+    return DWT->CYCCNT;
+}
+
+static uint32_t ui_cyc_to_us(uint32_t cyc)
+{
+    if (SystemCoreClock == 0u) {
+        return 0u;
+    }
+    return (uint32_t)(((uint64_t)cyc * 1000000ull) / (uint64_t)SystemCoreClock);
+}
+
+/* ns 级换算（ProbeAckTimed 量 ACK 时刻用） */
+static uint32_t ui_cyc_to_ns(uint32_t cyc)
+{
+    if (SystemCoreClock == 0u) {
+        return 0u;
+    }
+    return (uint32_t)(((uint64_t)cyc * 1000000000ull) / (uint64_t)SystemCoreClock);
+}
+
+/* µs → 周期数（把 SCL 高电平期换算成 DWT 周期做窗口边界） */
+static uint32_t ui_us_to_cyc(uint32_t us)
+{
+    return (uint32_t)(((uint64_t)us * (uint64_t)SystemCoreClock) / 1000000ull);
+}
+
 void BSP_I2C_UI_Lock(void)
 {
     if (s_i2c_ui_mtx != NULL &&
@@ -198,11 +277,223 @@ void BSP_I2C_UI_WakePulse(void)
     BSP_I2C_UI_WakePulseUs(100u);
 }
 
+uint32_t BSP_I2C_UI_WakePulseMeasUs(uint32_t low_us)
+{
+    uint32_t t0;
+    uint32_t t1;
+
+    if (low_us < 60u) {
+        low_us = 60u;
+    }
+    if (low_us > 20000u) {
+        low_us = 20000u;
+    }
+
+    /* 规范形态：SCL 先确保为高（空闲），再把 SDA 拉低 ≥tWLO 后释放。
+     * 不产生任何地址字节、不广播，因此不打扰同总线的 PCAL6524/SHT40/INA226。 */
+    UI_SCL_1();
+    i2c_delay();
+    t0 = ui_cyc_now();
+    UI_SDA_0();
+    bsp_DelayUS(low_us);
+    UI_SDA_1();
+    t1 = ui_cyc_now();
+    return ui_cyc_to_us(t1 - t0);
+}
+
+void BSP_I2C_UI_MarkerPulse(uint32_t low_us)
+{
+    if (low_us < 60u) {
+        low_us = 60u;
+    }
+    if (low_us > 20000u) {
+        low_us = 20000u;
+    }
+    /* SCL 保持空闲高；SDA 长低（远长于任何正常位）→ 屏上唯一的触发特征 */
+    UI_SCL_1();
+    i2c_delay();
+    UI_SDA_0();
+    bsp_DelayUS(low_us);
+    UI_SDA_1();
+}
+
+/* 与 i2c_send_byte 位序完全一致的地址发送，额外在最后一个数据位（被我们驱动为低）
+ * 期间回读 SDA —— 即"采样链路自检"，证明该瞬间线路上我们拉的低能被读到。 */
+static void ack_timed_send_addr(uint8_t b, uint8_t *ctrl_low)
+{
+    uint8_t i;
+    uint8_t ctrl = 0u;
+
+    for (i = 0u; i < 8u; i++) {
+        if ((b & 0x80u) != 0u) {
+            UI_SDA_1();
+        } else {
+            UI_SDA_0();
+        }
+        i2c_delay();
+        UI_SCL_1();
+        i2c_delay();
+        if (i == 7u) {
+            ctrl = UI_SDA_READ() ? 0u : 1u;   /* 此刻 SDA 由我们驱动为低 → 应读到低 */
+        }
+        UI_SCL_0();
+        if (i == 7u) {
+            UI_SDA_1();
+        }
+        b <<= 1;
+    }
+    if (ctrl_low != NULL) {
+        *ctrl_low = ctrl;
+    }
+}
+
+/* 内部：START + 地址字节 + 第 9 个时钟窗口采样 + STOP。
+ * 填 rise2low_ns/low_ns/n_samples/tail_low/ctrl_low；t_lo_us/t_hi_us 由调用方负责。
+ * t_frame_start（非 NULL 时输出）：地址帧**首个边沿之前**的时刻（供算 tWHI）。 */
+static void addr_frame_timed(uint8_t addr7, BSP_I2C_UI_ProbeTiming *t,
+                             uint32_t *t_frame_start)
+{
+    uint32_t t_rise;
+    uint32_t t_now;
+    uint32_t t_end;
+    uint32_t t_first = 0u;
+    uint32_t t_last_low = 0u;
+    uint32_t half_us;
+    uint32_t n = 0u;
+    uint8_t saw_low = 0u;
+    uint8_t last = 0u;
+    uint8_t ctrl = 0u;
+
+    half_us = (s_bit_delay_us != 0u) ? s_bit_delay_us : 2u;
+
+    if (t_frame_start != NULL) {
+        *t_frame_start = ui_cyc_now();   /* START 前一刻：通信正式开始 */
+    }
+    i2c_start();
+    ack_timed_send_addr((uint8_t)((addr7 << 1) | I2C_UI_WR), &ctrl);
+
+    /* 第 9 个时钟：SCL 拉高后按 ~50ns 粒度连续采样 SDA，直到高电平期结束 */
+    UI_SDA_1();            /* 释放 SDA，等从机应答 */
+    i2c_delay();
+    UI_SCL_1();
+    t_rise = ui_cyc_now();
+    t_end = t_rise + ui_us_to_cyc(half_us);
+    for (;;) {
+        t_now = ui_cyc_now();
+        if ((int32_t)(t_now - t_end) >= 0) {   /* 窗口结束（按差值判，避免绝对比较） */
+            break;
+        }
+        n++;
+        if (UI_SDA_READ()) {
+            last = 0u;
+        } else {
+            last = 1u;
+            if (saw_low == 0u) {
+                saw_low = 1u;
+                t_first = t_now;
+            }
+            t_last_low = t_now;
+        }
+    }
+    UI_SCL_0();
+    i2c_delay();
+    i2c_stop();
+
+    t->rise2low_ns = (saw_low != 0u) ? ui_cyc_to_ns(t_first - t_rise) : 0xFFFFFFFFu;
+    t->low_ns      = (saw_low != 0u) ? ui_cyc_to_ns(t_last_low - t_first) : 0u;
+    t->n_samples   = n;
+    t->tail_low    = last;
+    t->ctrl_low    = ctrl;
+}
+
+int BSP_I2C_UI_ProbeAckTimed(uint8_t addr7, BSP_I2C_UI_ProbeTiming *t)
+{
+    if (t == NULL) {
+        return -1;
+    }
+    t->t_lo_us = 0u;       /* 本函数不含唤醒 */
+    t->t_hi_us = 0u;
+    addr_frame_timed(addr7, t, NULL);
+    return (t->tail_low != 0u) ? 0 : -1;
+}
+
+int BSP_I2C_UI_WakeProbeTimed(uint8_t addr7, uint32_t low_us, uint32_t wait_us,
+                              BSP_I2C_UI_ProbeTiming *t)
+{
+    uint32_t ta;
+    uint32_t tb;
+    uint32_t t_frame = 0u;
+
+    if (t == NULL) {
+        return -1;
+    }
+    if (low_us < 60u) {
+        low_us = 60u;
+    }
+    if (low_us > 20000u) {
+        low_us = 20000u;
+    }
+
+    /* 1) 唤醒低脉冲（SCL 保持空闲高，不产生地址字节）+ 实测 tWLO */
+    UI_SCL_1();
+    i2c_delay();
+    ta = ui_cyc_now();
+    UI_SDA_0();
+    bsp_DelayUS(low_us);
+    UI_SDA_1();
+    tb = ui_cyc_now();
+    t->t_lo_us = ui_cyc_to_us(tb - ta);
+
+    /* 2) 唤醒后的等待：用 bsp_DelayUS 而非 vTaskDelay —— 不依赖 tick 粒度，
+     *    保证核查的是"真实等待时间"（规范 tWHI ≥1500µs）。 */
+    bsp_DelayUS(wait_us);
+
+    /* 3) 地址帧 + ACK 窗口；tWHI 实测 = 唤醒释放 → START 建立之前。
+     *    注意这是**保守**取值：线路上的第一个边沿（START 的 SDA 下降沿）还要再晚
+     *    约一个位延迟，故"实测 ≥1500µs"成立时，真实间隔更大。 */
+    addr_frame_timed(addr7, t, &t_frame);
+    t->t_hi_us = ui_cyc_to_us(t_frame - tb);
+
+    return (t->tail_low != 0u) ? 0 : -1;
+}
+
+/* ---- 总线恢复与空闲电平 ---- */
+
+void BSP_I2C_UI_IdleLevels(uint8_t *sda_high, uint8_t *scl_high)
+{
+    if (sda_high != NULL) { *sda_high = UI_SDA_READ() ? 1u : 0u; }
+    if (scl_high != NULL) { *scl_high = UI_SCL_READ() ? 1u : 0u; }
+}
+
+int BSP_I2C_UI_BusRecover(uint8_t *sda_high, uint8_t *scl_high)
+{
+    uint8_t sda = 0u;
+    uint8_t scl = 0u;
+    uint8_t i;
+
+    /* 若从机把 SDA 卡低（上次事务被中断），用 9 个 SCL 脉冲把它的移位寄存器
+     * 走完，再补一个 STOP 释放总线。SDA 全程只释放（不驱动低）。 */
+    UI_SDA_1();
+    for (i = 0u; i < 9u; i++) {
+        UI_SCL_0();
+        bsp_DelayUS(5u);
+        UI_SCL_1();
+        bsp_DelayUS(5u);
+    }
+    /* 标准 STOP：SDA 低 → SCL 高 → SDA 高 */
+    i2c_stop();
+
+    BSP_I2C_UI_IdleLevels(&sda, &scl);
+    if (sda_high != NULL) { *sda_high = sda; }
+    if (scl_high != NULL) { *scl_high = scl; }
+    return (sda != 0u && scl != 0u) ? 0 : -1;
+}
+
 /* ATECC608B Wake（规范 0x00 字节法）：以 ≤100kHz 连发 n 个 0x00 字节。
  * 关键：默认位延迟 2µs 时一个 0x00 字节只产生 ≈39µs 低电平 < tWLO 60µs，
  * 必然唤不醒；故这里强制 5µs 半周期（≈93kHz，1 字节 SDA 低 ≈86µs），
  * 并在返回前恢复原值——调用方无需感知速率。 */
-int BSP_I2C_UI_WakeZeroBytes(uint8_t n)
+int BSP_I2C_UI_WakeZeroBytesAt(uint8_t n, uint32_t half_us, uint8_t stop)
 {
     uint32_t saved = s_bit_delay_us;
     uint8_t i;
@@ -214,20 +505,48 @@ int BSP_I2C_UI_WakeZeroBytes(uint8_t n)
     if (n > 4u) {
         n = 4u;
     }
+    if (half_us < 1u) {
+        half_us = I2C_UI_SLOW_HALF_DELAY_US;
+    }
+    if (half_us > 1000u) {
+        half_us = 1000u;
+    }
 
-    s_bit_delay_us = I2C_UI_SLOW_HALF_DELAY_US;
+    s_bit_delay_us = half_us;
 
     i2c_start();
     for (i = 0u; i < n; i++) {
-        i2c_send_byte(0x00u);            /* 8 位全 0 → SDA 连续低 ≈86µs */
-        if (i2c_wait_ack() == 0u) {      /* 0x00 无人应答才正常 */
+        i2c_send_byte(0x00u);            /* 8 位全 0 → SDA 连续低（5µs 档 ≈86µs） */
+        if (i2c_wait_ack() == 0u) {
+            /* acked 语义＝"有器件 ACK 了这第一个 0x00"：注意该 0x00 **就是地址字节**，
+             * 即 I2C 通用呼叫地址 general call（0000 000）——本总线上有器件会应答它，
+             * 故 acked=1 属正常现象，**不能作为"ATECC 已唤醒"的判据**。
+             * 相较之下 BSP_I2C_UI_WakePulseMeasUs() 不产生任何地址字节，是更干净的唤醒法。 */
             acked = 1;
         }
     }
-    i2c_stop();
 
-    s_bit_delay_us = saved;              /* 恢复（默认 2µs ≈200kHz） */
+    if (stop != 0u) {
+        i2c_stop();
+    } else {
+        /* 不发 STOP 变体：此刻 i2c_wait_ack 结束时 SCL 已在低、SDA 已释放。
+         * 顺序必须是"先释放 SDA（SCL 低时 SDA 变化不构成任何条件）→ 再抬 SCL"，
+         * 这样全程不产生 STOP 条件。若照旧调 i2c_stop()（SDA 低→SCL 高→SDA 高）
+         * 反而**必然**生成一个 STOP —— 这正是该变体要避免的。 */
+        UI_SDA_1();
+        i2c_delay();
+        UI_SCL_1();
+        i2c_delay();
+    }
+
+    s_bit_delay_us = saved;              /* 恢复原档位 */
     return acked;
+}
+
+int BSP_I2C_UI_WakeZeroBytes(uint8_t n)
+{
+    /* 既有行为不变：5µs 半周期（≈93kHz）+ 标准 STOP 收尾 */
+    return BSP_I2C_UI_WakeZeroBytesAt(n, I2C_UI_SLOW_HALF_DELAY_US, 1u);
 }
 
 /* 诊断：持续拉低 SDA 约 ms 毫秒（阻塞）。用于万用表实测芯片 SDA 脚电平。 */
