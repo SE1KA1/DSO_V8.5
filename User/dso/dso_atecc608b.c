@@ -348,8 +348,15 @@ static int atecc_readprobe(uint8_t addr)
     return rc;
 }
 
+#if DSO_ATECC_DIAG_BATTERY
+/* ==================== 以下为一次性诊断代码（判定电池 + 各臂） ====================
+ * 用 DSO_ATECC_DIAG_BATTERY 整体开关：置 0 时本区间**不参与编译**
+ * （只留 probe_task 的 #else 分支：唤醒 + 只读 Info + Config dump），
+ * 既让开机干净，也避免一堆未被引用的 static 函数产生告警。
+ * 2026-10-10 换新 ATECC608B-SSHDA-T 后已确认芯片工作，默认置 0。 */
+
 /* 已知器件地址（不打标签跳过读探针）：PCAL6524 0x22、MCP23017 0x26/0x27、
- * INA226 0x40/0x41、SHT40 0x44、ATECC608B-TNGTLS 0x35/0x36 */
+ * INA226 0x40/0x41、SHT40 0x44、ATECC608B 0x60（0x35/0x36 已实测排除） */
 static int atecc_is_known(uint8_t addr)
 {
     return (addr == 0x22u || addr == 0x26u || addr == 0x27u ||
@@ -1184,6 +1191,8 @@ static uint8_t atecc_diag_l1_early(void)
     return ack;
 }
 
+#endif /* DSO_ATECC_DIAG_BATTERY */
+
 static void atecc608b_probe_task(void *pv)
 {
     uint8_t cfg[128];
@@ -1210,7 +1219,9 @@ static void atecc608b_probe_task(void *pv)
         hit = 0x60u;
     }
 #else
-    BSP_I2C_UI_SetBitDelayUs(DSO_ATECC_BIT_DELAY_US);
+    /* 正式路径（判定电池关闭时）：默认档位即可 —— 2026-10-10 实机确认芯片在
+     * 93kHz 快档（以及 1kHz 慢档）都正常应答，故不再降速，避免开机时把全总线
+     * 拖在慢档上（旧写法在这里设 500µs 会让随后的 Config dump 要 ~1.5s）。 */
     hit = (uint8_t)((DSO_Atecc608b_Wake(NULL, NULL) == 0) ? s_addr : 0u);
 #endif
 
