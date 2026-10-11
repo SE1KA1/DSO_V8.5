@@ -51,12 +51,15 @@ static int echo_send_all(int fd, const uint8_t *data, int len)
     return 0;
 }
 
-/* 行式命令字节处理（供回显状态机回退调用） */
+/* 行式命令字节处理（供回显状态机回退调用）。
+ * 应答缓冲为**文件级 static**：授权类命令的应答可达数百字节（签名 128 + 公钥 128
+ * + DeviceID），放栈上会吃掉任务栈。本文件只有一个命令处理任务，无重入。 */
+static char s_reply[DSO_SWITCH_CMD_REPLY_MAX];
 #define ETH_LINE_BYTE(c) do { \
     if ((c) == '\n') { \
-        char reply[256]; \
+        char *reply = s_reply; \
         s_cmd_line[s_cmd_line_len] = '\0'; \
-        if (DSO_Switch_Cmd_HandleLine(s_cmd_line, reply, sizeof(reply))) { \
+        if (DSO_Switch_Cmd_HandleLine(s_cmd_line, reply, sizeof(s_reply))) { \
             printf("[SWC] %s -> %s\r\n", s_cmd_line, reply); \
             DSO_ETH_Upload_SendLine(reply); \
         } else { \

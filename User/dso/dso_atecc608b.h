@@ -63,11 +63,22 @@ extern "C" {
 /** Arm G 信标 / 多采样复探的背靠背探测次数（示波器要一段干净可判定的 0xC0 串） */
 #define DSO_ATECC_BEACON_N         32u
 /**
- * ATECC **会话档**位延迟（半周期 µs）：Info/Read 等正式命令期间用。取 30µs ≈16kHz，
- * 与 BSP 的 ACK 多点采样（32 点、步长 = 半周期/32）正好铺满整个 SCL 高电平期；
- * 数据相位也有 30µs 的建立/保持余量（默认 2µs 对这颗片可能偏快）。
+ * ATECC **会话档**位延迟（半周期 µs）：Info/Read 等正式命令期间用。
+ * 当前取 **20µs ≈25kHz**（2026-10-11 由 500µs 下调）。
+ *
+ * 历史：
+ *   2026-10-10 曾改成 30µs，随后 Info 恒报 CRC 错（rc=-3）。真因**不是速率本身**，
+ *     而是 `i2c_wait_ack()` 的 ACK 多点采样把 ACK 时隙的 SCL 高电平压到几十 ns →
+ *     从机没采到第 9 个时钟 → 响应帧位计数错位（已在 bsp_i2c_ui.c 修好），
+ *     当时为求稳把档位退回 500µs。
+ *   2026-10-11 实测复现（同一颗片、同一份代码，**只改本档位**）：
+ *     Exec 两段式读 Config 32B @500µs → rc=-1(ERR_IO)；@20µs → rc=0 ✓
+ *     单次事务读 36B @20µs → count=0x23（完整 32 字节包）✓
+ *     ⇒ 500µs 档对本片不可靠（长事务尤其明显），20µs 已验证 Info/Read 均通。
+ * 注：2026-09-22 那颗正品在 500µs 下也通，说明"低速不稳"是本批器件的特性。
+ * 改本宏后回归两条：`[ATECC] Info rc=0` 与配置区 dump 完整。
  */
-#define DSO_ATECC_SESSION_BIT_US   30u
+#define DSO_ATECC_SESSION_BIT_US   20u
 /** 臂 E 追加的慢速扫描档（60µs 半周期 ≈ 8kHz）：慢速下的**全地址**覆盖 */
 #define DSO_ATECC_SCAN_SLOW_US     60u
 /**
@@ -98,6 +109,18 @@ extern "C" {
  */
 #define DSO_ATECC_DIAG_SETTLE_MS   1200u
 
+/* ---- CRC 约定：标准 vs **位序镜像**（2026-10-11） ----
+ * 本批器件（仿制件）的 CRC 是标准 CRC-16/ARC 的位序镜像。证据来自它**自己发出的**
+ * 两条帧（两个互相独立的 16 位匹配，偶然概率 ≈ 2^-32）：
+ *   裸读覆盖 {04,11}：我们的 ARC = 0xCCC2，rev16 = 0x4333，它实测尾字节 33 43  ✔
+ *   命令覆盖 {04,FF}：我们的 ARC = 0x8042，rev16 = 0x4201，它实测尾字节 01 42  ✔
+ * 所以我们的帧（含正确 CRC）在它眼里"CRC 错" → 回 0xFF；而它的帧我们也验不过。
+ * 正品 ATECC 用的是标准 CRC（2026-09-22 那颗片用同一份代码 Info rc=0 即为证）。 */
+/** 1 = 允许诊断臂确认后**自动**切到镜像 CRC；0 = 永远用标准 CRC（正品行为）。 */
+#define DSO_ATECC_CRC_MIRROR       1
+/** 1 = 跑一次性 CRC 约定判定臂（<2 s，4+1 帧）；只在 Info 失败时触发。 */
+#define DSO_ATECC_DIAG_CRC_CONV    1
+
 /** I2C word address：0x03 = Command（ATECC608 系列唯一合法 word 地址） */
 #define DSO_ATECC608B_WORD_CMD     0x03u
 
@@ -115,8 +138,14 @@ extern "C" {
 #define ATECC_OP_VERIFY    0x45u
 #define ATECC_OP_AES       0x51u
 
-/* Read 命令 Param1：bit7=32 字节读；bits6:4=zone(0=Config,2=Data)；bits3:0=block */
-#define ATECC_READ32_CONFIG_BLOCK(blk)  ((uint8_t)(0x80u | ((blk) & 0x0Fu)))
+/* Read 命令（**32 字节读**）的两个参数 —— 2026-10-11 实测修正：
+ *   Param1 = 0x80：bit7=1 表示 32 字节读，bits6:4=zone(0=Config,2=Data)，**bits3:0 必须为 0**。
+ *     （旧宏 `ATECC_READ32_CONFIG_BLOCK(blk)` 把块号塞进低 4 位 → 芯片对 blk≥1 回
+ *       **0x0F ExecutionError**；blk=0 时 0x80|0 恰好等于正确值，所以只有第 0 块能读通。）
+ *   Param2 = 地址：**以 4 字节字计**，Config 第 blk 块（32B）→ blk*8。
+ *     （同款约定：数据区读槽 N 也是 N*8。） */
+#define ATECC_READ32_P1            0x80u
+#define ATECC_READ32_ADDR(blk)     ((uint16_t)((uint16_t)(blk) * 8u))
 
 /* 错误码（<0）；最近一次执行状态码见 DSO_Atecc608b_LastStatus() */
 #define DSO_ATECC_ERR_PARAM    (-5)   /* 长度/参数非法 */
@@ -135,6 +164,16 @@ int DSO_Atecc608b_Exec(uint8_t opcode, uint8_t p1, uint16_t p2,
 
 /** 最近一次 Exec 返回的芯片状态字节（0x00=成功）。 */
 uint8_t DSO_Atecc608b_LastStatus(void);
+
+/**
+ * CRC 约定开关：1 = 用**位序镜像** CRC（rev16），0 = 标准 CRC-16/ARC。
+ * 由 CRC 约定判定臂在确认后自动置位；也可由上层显式设置（换片后需复位）。
+ * 默认 0（标准），故对正品器件行为无任何影响。
+ */
+void DSO_Atecc608b_SetCrcMirror(uint8_t on);
+
+/** 当前 CRC 约定：1 = 镜像，0 = 标准（供日志/遥测标注）。 */
+uint8_t DSO_Atecc608b_CrcMirror(void);
 
 /** Info(Revision)：返回 4 字节版本。@return 0 成功；<0 错误。 */
 int DSO_Atecc608b_InfoRevision(uint8_t rev[4]);
@@ -156,6 +195,76 @@ int DSO_Atecc608b_Probe(void);
 
 /** 创建一次性上电探测任务（打印 chip 识别/序列号/锁状态后自删）。 */
 void DSO_Atecc608b_Init(void);
+
+/* ==================== 授权/设备身份（Stage 1，**非破坏**） ====================
+ * 依据 Markdown/STM32H743 + ATECC608B-SSHDA-T + LCMXO2 FPGA 远程学生设备授权体系.md。
+ * 本阶段红线：**不写配置区、不写数据槽、不 Lock、不碰 OTP**（芯片保持可反复改）。
+ * 只读 + 片内签名/验签（全部在芯片内部完成，密钥不出片）。 */
+
+/* ---- 命令 opcode 与模式（ATECC608 定义；Mode/Param2 字节序按 CryptoAuthLib 惯例） ---- */
+#define ATECC_OP_WRITE     0x12u   /* 预留：本阶段**不封装不调用**（写入属 Stage 2） */
+#define ATECC_OP_GENKEY    0x40u   /* Mode 0x04=在槽内新建 ECC 私钥，返回 64B 公钥 */
+#define ATECC_OP_SHA       0x47u   /* 预留（SHA/HMAC，Mode 区分） */
+#define ATECC_OP_ECDH      0x43u   /* 预留 */
+#define ATECC_NONCE_MODE_PASSTHRU   0x03u  /* 32B 输入直接作为 TempKey（"挑战即摘要"） */
+#define ATECC_SIGN_MODE_DIGEST      0x80u  /* 对 TempKey 里的摘要用槽内私钥签名 */
+#define ATECC_VERIFY_MODE_STORED    0x00u  /* 用槽内公钥验签 */
+#define ATECC_GENKEY_MODE_NEW_ECC   0x04u  /* 新建 ECC 私钥（Mode 0x00=只取公钥） */
+
+/** 设备证明用的私钥槽（文档：Slot0 = 设备 ECC P256 根私钥，Sign-only） */
+#define DSO_ATECC_AUTH_SLOT         0u
+
+/* ---- DeviceID：16 个十六进制字符 = 标签前 8 字符 + 8 字符随机段 ----
+ * 随机段本阶段取自 **STM32 96-bit UID 的 CRC32**（跨重启稳定，是服务器 Device 表主键的前提；
+ * 文档第 13 行本就允许用 STM32 UID 作复合身份）。**Stage 2 升级路径**：随机段改由 ATECC TRNG
+ * 生成并写入 Slot1 持久化（格式不变，后端无感）。 */
+#define DSO_DEVICE_LABEL            "Eep210251A08891"  /* 开发板物理标签；量产按台改 */
+#define DSO_DEVICE_ID_LEN           16u                /* 字符数（不含结尾 NUL） */
+
+/** 设备身份/芯片状态的只读快照（周期上报用；由探测任务与每次访问刷新） */
+typedef struct {
+    uint8_t present;      /* 1=地址应答且 Info 成功 */
+    uint8_t comm_ok;      /* 1=最近一次访问成功 */
+    uint8_t fail_cnt;     /* 连续失败次数 */
+    uint8_t rev[4];       /* Info(Revision) 4 字节 */
+    uint8_t serial4[4];   /* SN 低 4 字节（spec 的 serial4） */
+    uint8_t lock_config;  /* 1=配置区已锁（cfg[0x57]==0） */
+    uint8_t lock_data;    /* 1=数据区已锁（cfg[0x56]==0 或 SlotLocked 非 0） */
+} DSO_Atecc608b_Status;
+
+/** 读取只读状态快照（线程安全：内部短暂持总线锁）。 */
+void DSO_Atecc608b_GetStatus(DSO_Atecc608b_Status *st);
+
+/** DeviceID 16 字符（大写十六进制风格，标签段原样）写入 out[17]（含 NUL）。@return 0 成功 */
+int DSO_Atecc608b_DeviceId16(char out[DSO_DEVICE_ID_LEN + 1u]);
+
+/** STM32 96-bit UID 的 24 位十六进制串写入 out[25]（供后端对账）。@return 0 成功 */
+int DSO_Atecc608b_UidHex(char out[25]);
+
+/** 读取槽内公钥 64 字节（X||Y）。只读：Data 区两次 32B Read。
+ *  @return 0 成功；<0 失败（私钥槽常被配成 ReadConfig=Never，此时须在 GenKey 时取公钥） */
+int DSO_Atecc608b_GetPubKey64(uint8_t slot, uint8_t out[64]);
+
+/** 片内挑战签名自测：Nonce(Mode 0x03 挑战即摘要) → Sign(Slot0) → Verify(Stored, Slot0)。
+ *  全程密钥不出片、无任何写入。@param allow_genkey 1=仅当签名因"槽内无密钥"失败时，
+ *  允许 GenKey(Mode 0x04) 新建 Slot0 私钥后重试（**会消耗一次空槽→有密钥的转变**，
+ *  默认 0 即纯只读）。@return 0 成功；<0 错误码；verify_ok 输出片内验签结果（1=通过） */
+int DSO_Atecc608b_AuthSelfTest(const uint8_t challenge[32], uint8_t sig_out[64],
+                               uint8_t *verify_ok, uint8_t allow_genkey);
+
+/** 只读：逐槽打印 SlotConfig（原始字节 + 按 ATECC608 惯例解读），供"先读后写"决策。
+ *  @param cfg128 调用方已读到的 128 字节配置区；传 NULL 则函数自己读（多花 ~4 次读） */
+void DSO_Atecc608b_DumpSlotConfig(const uint8_t *cfg128);
+
+/** 上电是否跑一次片内挑战签名自测（bring-up 期 =1；稳定后可设 0）。
+ *  用固定挑战（仅自检用），正式流程由服务器下发随机挑战。 */
+#define DSO_ATECC_AUTH_SELFTEST_AT_BOOT   1
+
+/** 连续访问失败达到该次数判为 tamper（遥测事件阈值；0 时不可为 0） */
+#define DSO_ATECC_TAMPER_FAIL             10u
+
+/** 字节数组 → 大写十六进制串（out 需 2*n+1 字节）。命令应答里格式化签名/公钥用。 */
+void DSO_Atecc608b_HexUpper(const uint8_t *b, uint16_t n, char *out);
 
 #ifdef __cplusplus
 }

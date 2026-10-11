@@ -22,17 +22,28 @@
 #include "dso_ina226.h"
 #include "dso_ina226_u44.h"
 #include "dso_watchdog.h"     /* 远程复位入口 DSO_Watchdog_RequestReboot */
+#include "dso_atecc608b.h"    /* 授权 Stage 1：设备身份 + 片内挑战签名 */
 #include "bsp.h"              /* stm32h7xx_hal + bsp_uart_fifo（提供 USART_TypeDef/__IO 前置） */
 #include "lwip/netif.h"
 #include "debug_uart_lock.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"           /* 命令分发串行化锁（必须在 FreeRTOS.h 之后） */
 #include <string.h>
 #include <stdio.h>
 
 /* 蜂鸣器静音状态：set_buzzer 命令置位，节奏引擎/串口任务读取。
  * 定义在文件顶部，因 DSO_Switch_Cmd_HandleLine()（下方）与 getter 均需引用。 */
 static volatile uint8_t s_buzzer_mute = 0;         /* 1=静音（蜂鸣器完全停，LED 照常） */
+
+/* 命令应答缓冲（文件级 static：串口任务栈仅 2KB，而授权命令应答可达数百字节——
+ * 128 字符签名 + 128 字符公钥 + DeviceID）。本文件只有串口任务在用它，无重入。 */
+static char s_reply[DSO_SWITCH_CMD_REPLY_MAX];
+
+/* 命令处理串行化锁：串口任务与以太网命令通道是两个不同任务，都会调用命令分发。
+ * 授权命令在分发里有文件级/函数级 static 缓冲（签名、公钥、挑战），必须互斥，
+ * 否则两条通道并发时会互相踩缓冲。 */
+static SemaphoreHandle_t s_cmd_mtx = NULL;
 
 /* ---- 最小 JSON 子集辅助（供本模块与 dso_fmc_telemetry 共用） ---- */
 
@@ -105,7 +116,40 @@ static int json_get_int(const char *line, const char *key, int *out)
 
 /* ---- 命令分发 ---- */
 
-int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
+/* hex 串 -> 字节（授权命令解析 challenge_hex 用）。@return 字节数；-1=格式/长度错 */
+static int sw_cmd_nibble(char c)
+{
+    if (c >= '0' && c <= '9') { return (int)(c - '0'); }
+    if (c >= 'a' && c <= 'f') { return (int)(c - 'a') + 10; }
+    if (c >= 'A' && c <= 'F') { return (int)(c - 'A') + 10; }
+    return -1;
+}
+
+static int sw_cmd_hex2bin(const char *hex, uint8_t *out, size_t out_max)
+{
+    size_t n;
+    size_t i;
+
+    if (hex == NULL || out == NULL) {
+        return -1;
+    }
+    n = strlen(hex);
+    if (n == 0u || (n & 1u) != 0u || (n / 2u) > out_max) {
+        return -1;
+    }
+    for (i = 0u; i < n / 2u; i++) {
+        int hi = sw_cmd_nibble(hex[2u * i]);
+        int lo = sw_cmd_nibble(hex[2u * i + 1u]);
+        if (hi < 0 || lo < 0) {
+            return -1;
+        }
+        out[i] = (uint8_t)(((uint8_t)hi << 4) | (uint8_t)lo);
+    }
+    return (int)(n / 2u);
+}
+
+/* 分发本体（调用方须持 s_cmd_mtx） */
+static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz)
 {
     char cmd[32];
     int  seq = 0;
@@ -193,7 +237,115 @@ int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
         return 1;
     }
 
+    /* ---- 授权 Stage 1（设备身份 + 片内挑战签名；只读，私钥永不出片） ---- */
+
+    if (strcmp(cmd, "atecc.get_devid") == 0) {
+        char did[DSO_DEVICE_ID_LEN + 1u];
+        char uid[25];
+        (void)DSO_Atecc608b_DeviceId16(did);
+        (void)DSO_Atecc608b_UidHex(uid);
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"atecc.get_devid\",\"result\":\"ok\",\"error\":\"\","
+                 "\"data\":{\"device_id\":\"%s\",\"label8\":\"%.8s\",\"uid_hex\":\"%s\"}}",
+                 seq, did, did, uid);
+        return 1;
+    }
+
+    if (strcmp(cmd, "atecc.get_pubkey") == 0) {
+        static uint8_t pk[64];
+        static char pkhex[129];
+        char did[DSO_DEVICE_ID_LEN + 1u];
+        int rc;
+        (void)DSO_Atecc608b_DeviceId16(did);
+        rc = DSO_Atecc608b_GetPubKey64(DSO_ATECC_AUTH_SLOT, pk);
+        if (rc != 0) {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.get_pubkey\",\"result\":\"error\","
+                     "\"error\":\"pubkey read failed rc=%d st=0x%02X (Slot0 has no ECC key?)\","
+                     "\"data\":{\"slot\":%u}}",
+                     seq, rc, (unsigned)DSO_Atecc608b_LastStatus(),
+                     (unsigned)DSO_ATECC_AUTH_SLOT);
+            return 1;
+        }
+        DSO_Atecc608b_HexUpper(pk, 64u, pkhex);
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"atecc.get_pubkey\",\"result\":\"ok\",\"error\":\"\","
+                 "\"data\":{\"pubkey_hex\":\"%s\",\"slot\":%u,\"device_id\":\"%s\"}}",
+                 seq, pkhex, (unsigned)DSO_ATECC_AUTH_SLOT, did);
+        return 1;
+    }
+
+    if (strcmp(cmd, "atecc.auth_start") == 0) {
+        static char chal_hex[130];
+        static uint8_t chal[32];
+        static uint8_t sig[64];
+        static uint8_t pk[64];
+        static char sighex[129];
+        static char pkhex[129];
+        char did[DSO_DEVICE_ID_LEN + 1u];
+        uint8_t vok = 0u;
+        int rc;
+
+        if (!json_get_str(line, "challenge_hex", chal_hex, sizeof(chal_hex)) ||
+            sw_cmd_hex2bin(chal_hex, chal, sizeof(chal)) != 32) {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.auth_start\",\"result\":\"error\","
+                     "\"error\":\"need params.challenge_hex = 64 hex chars (32 bytes)\","
+                     "\"data\":{}}", seq);
+            return 1;
+        }
+        (void)DSO_Atecc608b_DeviceId16(did);
+        /* Nonce(挑战即摘要) -> Sign(Slot0) -> Verify(片内)，全程读+片内运算 */
+        rc = DSO_Atecc608b_AuthSelfTest(chal, sig, &vok, 0u);
+        if (rc != 0) {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.auth_start\",\"result\":\"error\","
+                     "\"error\":\"sign/verify failed rc=%d st=0x%02X (Slot0 has no usable ECC key?)\","
+                     "\"data\":{\"device_id\":\"%s\"}}",
+                     seq, rc, (unsigned)DSO_Atecc608b_LastStatus(), did);
+            return 1;
+        }
+        DSO_Atecc608b_HexUpper(sig, 64u, sighex);
+        if (DSO_Atecc608b_GetPubKey64(DSO_ATECC_AUTH_SLOT, pk) == 0) {
+            DSO_Atecc608b_HexUpper(pk, 64u, pkhex);
+        } else {
+            pkhex[0] = '\0';
+        }
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"atecc.auth_start\",\"result\":\"ok\",\"error\":\"\","
+                 "\"data\":{\"device_id\":\"%s\",\"signature_hex\":\"%s\","
+                 "\"pubkey_hex\":\"%s\",\"slot\":%u,\"self_verify\":%u}}",
+                 seq, did, sighex, pkhex, (unsigned)DSO_ATECC_AUTH_SLOT, (unsigned)vok);
+        return 1;
+    }
+    /* atecc.auth_verify（服务器 CA 签名的 License 校验）需 Slot2 预置 CA 公钥
+     * → 属 Stage 2（要改配置区/写数据槽），本阶段只留此占位注释。 */
+
     return 0;   /* 非本模块命令，交给其它处理器 */
+}
+
+int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
+{
+    int rc;
+
+    if (line == NULL || reply == NULL || reply_sz == 0u) {
+        return 0;
+    }
+    /* 串行化：串口任务与以太网命令通道是两个任务（分发内有 static 缓冲） */
+    if (s_cmd_mtx != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+        (void)xSemaphoreTake(s_cmd_mtx, portMAX_DELAY);
+    }
+    rc = sw_cmd_handle_locked(line, reply, reply_sz);
+    if (s_cmd_mtx != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+        (void)xSemaphoreGive(s_cmd_mtx);
+    }
+    return rc;
 }
 
 /* ---- 串口命令接收（CH340/UART1，1152000） ---- */
@@ -211,14 +363,15 @@ static void vSwitchSerialTask(void *pvParameters)
     for (;;) {
         if (comGetChar(COM1, &ch)) {
             if (ch == '\n') {
-                char reply[256];
+                /* 应答缓冲用**文件级 static**（本任务栈仅 2KB；授权命令应答可达数百字节） */
+                char *reply = s_reply;
                 s_serial_line[s_serial_line_len] = '\0';
                 s_last_usb_rx_tick = xTaskGetTickCount();
                 /* 诊断：打印收到的每一行，确认串口 RX 通路（定位后移除） */
                 DebugUartLock();
                 printf("[SER] got %d: %s\r\n", s_serial_line_len, s_serial_line);
                 DebugUartUnlock();
-                if (DSO_Switch_Cmd_HandleLine(s_serial_line, reply, sizeof(reply))) {
+                if (DSO_Switch_Cmd_HandleLine(s_serial_line, reply, sizeof(s_reply))) {
                     /* 串口回 ack（与其它 printf 互斥，防字节交错） */
                     DebugUartLock();
                     printf("%s\r\n", reply);
@@ -247,6 +400,9 @@ static void vSwitchSerialTask(void *pvParameters)
 void DSO_Switch_Cmd_Init(void)
 {
     DSO_Switch_Init();
+    if (s_cmd_mtx == NULL) {
+        s_cmd_mtx = xSemaphoreCreateMutex();
+    }
     /* 优先级 4（> MainTask 的 2）：云桥模块会使 MainTask 卡死(GUI_Init)并 spin，
      * 饿死 prio-1 任务；提到 4 保证开关串口命令能抢占处理。 */
     if (xTaskCreate(vSwitchSerialTask, "SW_Ser", 512, NULL, 3, NULL) != pdPASS) {

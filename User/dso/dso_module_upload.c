@@ -19,6 +19,7 @@
 #include "dso_freq_meter.h"
 #include "dso_acq.h"
 #include "dso_watchdog.h"
+#include "dso_atecc608b.h"
 #include "bsp_pcal6524.h"
 #include "fmc16_conf.h"
 #include "lwip/sockets.h"
@@ -188,6 +189,7 @@ static void mup_task(void *pv)
 {
     uint8_t prev_sht_ok = 1u;
     uint8_t prev_over = 0u;
+    uint8_t prev_atecc_fail = 0u;
     uint8_t last_state = 0u;   /* 0=未连接 1=已连接 */
     (void)pv;
 
@@ -215,6 +217,47 @@ static void mup_task(void *pv)
         vTaskDelay(pdMS_TO_TICKS(MUP_PERIOD_MS));
         if (s_fd < 0) {
             continue;
+        }
+
+        /* 模块 1：atecc608b（密码芯片身份/授权状态；只读） */
+        {
+            char js[288];
+            char did[DSO_DEVICE_ID_LEN + 1u];
+            char ser4[9];
+            DSO_Atecc608b_Status ast;
+
+            DSO_Atecc608b_GetStatus(&ast);
+            (void)DSO_Atecc608b_DeviceId16(did);
+            /* serial4 = SN[0..3]，spec 要求 ≤8 字符小写 hex */
+            (void)snprintf(ser4, sizeof(ser4), "%02x%02x%02x%02x",
+                           (unsigned)ast.serial4[0], (unsigned)ast.serial4[1],
+                           (unsigned)ast.serial4[2], (unsigned)ast.serial4[3]);
+            if (ast.present != 0u) {
+                snprintf(js, sizeof(js),
+                         "{\"present\":1,\"comm_ok\":%u,\"device_id\":\"%s\","
+                         "\"chip_info\":{\"serial4\":\"%s\",\"part\":\"608B\","
+                         "\"rev\":\"%02x%02x%02x%02x\",\"lock_config\":%u,\"lock_data\":%u},"
+                         "\"login_state\":\"LOGGED_OUT\",\"fail_cnt\":%u}",
+                         (unsigned)ast.comm_ok, did, ser4,
+                         (unsigned)ast.rev[0], (unsigned)ast.rev[1],
+                         (unsigned)ast.rev[2], (unsigned)ast.rev[3],
+                         (unsigned)ast.lock_config, (unsigned)ast.lock_data,
+                         (unsigned)ast.fail_cnt);
+            } else {
+                snprintf(js, sizeof(js),
+                         "{\"present\":0,\"comm_ok\":%u,\"device_id\":\"%s\","
+                         "\"login_state\":\"LOGGED_OUT\",\"fail_cnt\":%u}",
+                         (unsigned)ast.comm_ok, did, (unsigned)ast.fail_cnt);
+            }
+            mup_send("atecc608b", "module.data", js);
+            /* tamper 事件：连续读失败越过阈值才报（单次抖动不误报） */
+            if (prev_atecc_fail < DSO_ATECC_TAMPER_FAIL &&
+                ast.fail_cnt >= DSO_ATECC_TAMPER_FAIL) {
+                mup_send("atecc608b", "module.event",
+                         "{\"event\":\"tamper\",\"level\":\"warning\","
+                         "\"detail\":\"ATECC consecutive comm failures\"}");
+            }
+            prev_atecc_fail = ast.fail_cnt;
         }
 
         /* 模块 3：sht40（温度 + 湿度） */

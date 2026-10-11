@@ -69,8 +69,16 @@ static void i2c_send_byte(uint8_t b)
         UI_SCL_1();
         i2c_delay();
         UI_SCL_0();
+        /* **tHD;DAT（关键修正）**：I2C 规范要求 SCL 下降沿之后继续保持 SDA ≥300ns，
+         * 让从机跨过其输入端在下降沿附近的不确定区，再允许 SDA 改变/释放。
+         * 原实现是 `UI_SCL_0()` 之后**立即**进入下一轮去改 SDA（第 8 位则是立即释放），
+         * 保持时间为零 → 输入采样严格的从机（如本板 ATECC608B）可能把某位采错，
+         * 于是整帧 CRC 不符、芯片回 Status 0xFF（"CRC/通信错、未执行"）。
+         * 这里统一在每次下降沿后保持一个位延迟代价很小（会话档 500µs 时约使帧时长翻倍，
+         * 默认 2µs 时几乎无感），且对所有从机都是更合规的时序。 */
+        i2c_delay();
         if (i == 7U) {
-            UI_SDA_1();   /* 释放 SDA 准备收 ACK */
+            UI_SDA_1();   /* 保持够了再释放 SDA，准备收 ACK */
         }
         b <<= 1;
     }
@@ -103,29 +111,18 @@ void BSP_I2C_UI_SetAckMultiSample(uint8_t on)
 static uint8_t i2c_wait_ack(void)
 {
     uint8_t re;
-    uint8_t saw_low = 0u;
-    uint8_t k;
-    uint32_t step;
 
     UI_SDA_1();
     i2c_delay();
     UI_SCL_1();
     if (s_ack_multisa != 0u) {
-        /* 高电平期内多点采样：把半周期等分，任一次读到低即判 ACK。
-         * 用于 ATECC608B —— 实测它在 SCL 高电平期间拉低 SDA，但单点采样会漏读。 */
-        step = (s_bit_delay_us != 0u) ? s_bit_delay_us : 2u;
-        step /= I2C_UI_ACK_SAMPLES;
-        if (step < 1u) {
-            step = 1u;
-        }
-        for (k = 0u; k < I2C_UI_ACK_SAMPLES; k++) {
-            if (!UI_SDA_READ()) {
-                saw_low = 1u;
-                break;
-            }
-            bsp_DelayUS(step);
-        }
-        re = (saw_low != 0u) ? 0u : 1u;
+        /* 多点采样：**高电平期起点与终点各采一次，任一为低即判 ACK**。
+         * ⚠️ 曾经写成"32 点铺满窗口、采到低就立刻结束"，那会把 ACK 时隙的 SCL 高电平
+         * 压到几十 ns；从机可能没采到第 9 个时钟 → **后续响应帧位计数错位**（表现为
+         * 地址 ACK 正常但响应帧 CRC 恒错）。故这里必须**撑满标准高电平期**再降 SCL。 */
+        uint8_t early = (UI_SDA_READ() == 0u) ? 1u : 0u;
+        i2c_delay();                                  /* 保持与单点采样相同的时钟占空 */
+        re = (early != 0u || UI_SDA_READ() == 0u) ? 0u : 1u;
     } else {
         i2c_delay();
         re = UI_SDA_READ() ? 1U : 0U;

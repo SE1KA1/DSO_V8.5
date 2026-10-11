@@ -28,6 +28,11 @@ void DSO_Switch_Cmd_Init(void);
  */
 int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz);
 
+/** 应答缓冲建议大小：授权类命令要回 128 字符签名 + 128 字符公钥 + DeviceID，
+ *  两个调用点（串口任务 / 以太网命令宏）都应开这么大——**用文件级 static 开**，
+ *  不要放栈上（串口任务栈仅 2KB）。 */
+#define DSO_SWITCH_CMD_REPLY_MAX   768u
+
 /** 最小 JSON 子集：按 key 读取字符串/整数值（容忍空白）。供遥测/命令模块共用。 */
 int DSO_Switch_Cmd_JsonGetStr(const char *line, const char *key, char *buf, size_t buf_sz);
 int DSO_Switch_Cmd_JsonGetInt(const char *line, const char *key, int *out);
