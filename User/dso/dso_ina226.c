@@ -4,7 +4,7 @@
  *
  * 配置（首次成功后不再重复写）：
  *   Config 0x0527   AVG=16、VBUSCT/VSHCT=1.1ms、连续 shunt+bus；AlertPol=0(开漏低有效)
- *   Alert Limit     DSO_INA226_ALERT_LSB（告警线 1400 LSB = 3.5mV ≈ 35mA）
+ *   Alert Limit     DSO_INA226_ALERT_LSB（告警线 2800 LSB = 7.0mV ≈ 70mA）
  *   Mask/Enable     0x8001（SOL=1 + LEN 锁存）
  * 过流时 ALERT 引脚拉低并锁存；非引擎响铃窗口每周期读 Mask/Enable 清锁存
  * 使能重新武装（引擎响铃窗口跳过 M/E，见 ina226_measure_once）。
