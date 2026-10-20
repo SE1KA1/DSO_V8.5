@@ -528,6 +528,13 @@ int main(void)
     DSO_Atecc608b_Provision_Init();
 #endif
 
+#if DSO_ATECC_CFG5_ONESHOT
+    /* 配置区 word7 一次性任务（**开发用**，幂等）：默认 REVERT=1 ⇒ 把 SlotConfig[5] 写回
+     * 出厂值 0x8F8F；REVERT=0 ⇒ 改成 0x0000 并测数据区写路径。
+     * 只动配置区字节 0x1E/0x1F；不 Lock、不碰 OTP。 */
+    DSO_Atecc608b_Cfg5Exp_Init();
+#endif
+
     /* module_telemetry 模块数据上报（sht40 / ina226_u10，spec-00 信封走遥测 TCP） */
     DSO_ModuleUpload_Init();
 

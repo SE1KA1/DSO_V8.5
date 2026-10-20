@@ -180,6 +180,26 @@ extern "C" {
  */
 #define DSO_ATECC_PROV_GENKEY      0u
 
+/* ---- 可逆实验：SlotConfig[5] 0x8F8F -> 0x0000（**唯一一次的配置区写**，DEV ONLY）----
+ * 目的：分离"数据区 0x0F 是槽策略导致"还是"配置区未锁定导致"。步骤：
+ *   1) 只读验址：Read(0x02, P1=0x00, P2=0x0007) 必须回 8F 8F 8F 8F（证明 P2 是**字号**）；
+ *   2) 写配置区 **word 7**（字节 0x1C-0x1F）为 8F 8F 00 00 —— 只动 0x1E/0x1F；
+ *   3) 整块回读逐字节比对（其它字节必须不变）；
+ *   4) 跑现有写路径测试（槽5 写图案再读回）判定数据区在未锁状态下是否可写。
+ * 红线：**不发送 Lock**、**不碰 OTP**、不改其它任何配置字节、失败即停不重试。
+ * ⚠️ Mode=0x00 是"4 字节 + Config zone"；Param2=7 是**字号**（不是字节偏移 0x1C，
+ *    后者会解码成 block3/word4 从而写到 0x70-0x73，且可能不报错）。 */
+#define DSO_ATECC_CFG5_ONESHOT     1u
+#define ATECC_WRITE_MODE_CFG4      0x00u
+#define ATECC_CFG_SLOT5_WORD       0x0007u
+/* 1 = 本次运行执行**恢复**：把 word7 写回出厂值 `8F 8F 8F 8F`（即 SlotConfig[5]=0x8F8F），
+ * 不跑数据区测试；已是出厂值则跳过（幂等，可放心反复上电）。0 = 执行原实验（改成 0x0000）。 */
+#define DSO_ATECC_CFG5_REVERT      1u
+
+#if (DSO_ATECC_CFG5_ONESHOT != 0u) && (DSO_ATECC_PROVISION_ONESHOT != 0u)
+#error "enable only ONE ATECC one-shot writer (CFG5 vs PROVISION)"
+#endif
+
 /** I2C word address：0x03 = Command（ATECC608 系列唯一合法 word 地址） */
 #define DSO_ATECC608B_WORD_CMD     0x03u
 
@@ -323,6 +343,10 @@ int DSO_Atecc608b_ProvisionSlot0(const uint8_t priv[32], const uint8_t pub_expec
 
 /** 创建一次性预置任务（**1024 字栈**；受 DSO_ATECC_PROVISION_ONESHOT 控制，默认不创建）。 */
 void DSO_Atecc608b_Provision_Init(void);
+
+/** 创建"SlotConfig[5] -> 0x0000"可逆实验任务（**1024 字栈**；受 DSO_ATECC_CFG5_ONESHOT 控制）。
+ *  只写配置区 word 7（字节 0x1C-0x1F）里的 0x1E/0x1F 两个字节；不 Lock、不碰 OTP。 */
+void DSO_Atecc608b_Cfg5Exp_Init(void);
 
 /** 只读：逐槽打印 SlotConfig（原始字节 + 按 ATECC608 惯例解读），供"先读后写"决策。
  *  @param cfg128 调用方已读到的 128 字节配置区；传 NULL 则函数自己读（多花 ~4 次读） */

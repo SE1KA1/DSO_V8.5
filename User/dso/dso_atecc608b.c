@@ -63,6 +63,7 @@
 
 static uint8_t s_last_status = 0xFFu;   /* 最近执行状态码 */
 static uint8_t s_status_valid = 0u;     /* 1=本轮确实从芯片读到了状态字节（区分初值 0xFF） */
+static uint8_t s_wp_last_st = 0xFFu;    /* 写路径测试里"写"这一步的状态字节（供结论行使用） */
 /* 会话档位延迟（半周期 µs）：默认取宏；诊断可在运行时改（速率扫描用）。
  * 注意 Exec 会用它覆盖总线档位，故调用方设的档位会被覆盖——扫档必须走这个变量。 */
 static uint32_t s_session_bit_us = DSO_ATECC_SESSION_BIT_US;
@@ -2909,10 +2910,11 @@ static uint8_t atecc_verify_write_path(void)
         rb[i] = 0u;
     }
     rc = atecc_write_slot32(ATECC_WRITE_TEST_SLOT, pat);
+    s_wp_last_st = DSO_Atecc608b_LastStatus();   /* 记录"写"这一步的状态（结论行要用） */
     DebugUartLock();
     printf("[ATECC-P] step2 write slot%u: rc=%d st=0x%02X %s\r\n",
            (unsigned)ATECC_WRITE_TEST_SLOT, rc,
-           (unsigned)DSO_Atecc608b_LastStatus(), (rc == 0) ? "<accepted>" : "(refused/failed)");
+           (unsigned)s_wp_last_st, (rc == 0) ? "<accepted>" : "(refused/failed)");
     DebugUartUnlock();
     if (rc != 0) {
         return 0u;
@@ -3217,5 +3219,356 @@ void DSO_Atecc608b_Init(void)
     if (xTaskCreate(atecc608b_probe_task, "AteccP", 1024, NULL, 3, NULL)
             != pdPASS) {
         printf("[BOOT] FAIL AteccP\r\n");
+    }
+}
+
+/* ========================================================================
+ * 可逆实验：SlotConfig[5] 0x8F8F -> 0x0000（DEV ONLY，见 DSO_ATECC_CFG5_ONESHOT）
+ * ------------------------------------------------------------------------
+ * 目的：把"数据区返回 0x0F"的两种可能原因分开 ——
+ *   (A) 出厂 SlotConfig 策略拒绝（slot5 = 0x8F8F：IsSecret=1 / RdKey=15 / WrCfg=8）
+ *   (B) 配置区未锁定门控
+ * 若改完配置后数据区就能写读 ⇒ A 成立 ⇒ 开发全程不需要 Lock。
+ *
+ * 安全边界（不可协商）：
+ *   - 只写配置区 **word 7**（字节 0x1C-0x1F）里的 0x1E/0x1F 两个字节；
+ *   - **不发送 Lock（0x17）**、**不碰 OTP 区**（本文件不存在 0x17 与 OTP 写路径）；
+ *   - 写前用 4 字节只读探针验址；写后整块回读逐字节比对；任何异常即停、不重试。
+ * ======================================================================== */
+
+/* 写配置区 word 7。**Mode 与地址在本函数内硬编码**，调用方无法传错：
+ *   Mode 0x00 = 4 字节 + Config zone；Param2 = 7 = **字号**（不是字节偏移 0x1C ——
+ *   0x1C 会被解码成 block3/word4 从而写到 0x70-0x73，且可能不报错）。 */
+static int atecc_cfg_write_word7(const uint8_t w4[4])
+{
+    int rc = DSO_Atecc608b_Exec(ATECC_OP_WRITE, ATECC_WRITE_MODE_CFG4,
+                                ATECC_CFG_SLOT5_WORD, w4, 4u, NULL, 0u);
+    if (rc == DSO_ATECC_ERR_CRC && DSO_Atecc608b_LastStatus() == 0x00u) {
+        return 0;                 /* 既有约定：错误组 CRC 不过但状态 0x00 ⇒ 实际已接受 */
+    }
+    return rc;
+}
+
+/* 打 128 字节配置区（4 行），与开机 dump 同格式，便于逐字节比对 */
+static void atecc_c5_dump(const char *tag, const uint8_t *cfg)
+{
+    char line[160];
+    uint8_t blk;
+    uint8_t i;
+    int n;
+
+    for (blk = 0u; blk < 4u; blk++) {
+        n = sprintf(line, "[ATECC-C5] %s cfg%02X:", tag, (unsigned)(blk * 32u));
+        for (i = 0u; i < 32u; i++) {
+            n += sprintf(line + n, " %02X", cfg[blk * 32u + i]);
+        }
+        sprintf(line + n, "\r\n");
+        DebugUartLock();
+        printf("%s", line);
+        DebugUartUnlock();
+    }
+}
+
+/* @return 1 = 配置区确实变成了期望值（回读为准） */
+static uint8_t atecc_cfg5_experiment(void)
+{
+    uint8_t pre[128];
+    uint8_t post[128];
+    uint8_t rev[4];
+    uint8_t w4[4];
+    uint8_t probe[4];
+    uint8_t rd[32];
+    uint8_t blk;
+    uint8_t i;
+    uint8_t want;
+    uint8_t skipped = 0u;
+    uint8_t cfg_ok = 0u;
+    uint8_t unexpected = 0u;
+    uint8_t diffs = 0u;
+    uint8_t wok = 0u;
+    uint8_t rd_after = 0u;
+    uint8_t st = 0xFFu;
+    int rc;
+    int wr = -99;
+#if DSO_ATECC_CFG5_REVERT
+    /* 恢复模式：目标 = 出厂值 8F 8F；只有当前恰为 00 00 时才动手 */
+    const uint8_t tgt_lo = 0x8Fu;
+    const uint8_t tgt_hi = 0x8Fu;
+    const uint8_t cur_lo = 0x00u;
+    const uint8_t cur_hi = 0x00u;
+#else
+    /* 实验模式：目标 = 00 00；只有当前恰为出厂值 8F 8F 时才动手 */
+    const uint8_t tgt_lo = 0x00u;
+    const uint8_t tgt_hi = 0x00u;
+    const uint8_t cur_lo = 0x8Fu;
+    const uint8_t cur_hi = 0x8Fu;
+#endif
+
+    if (atecc_prov_target_ok() == 0) {
+        return 0u;
+    }
+
+    /* (2) Info 复读 */
+    rc = DSO_Atecc608b_InfoRevision(rev);
+    DebugUartLock();
+    printf("[ATECC-C5] target pinned 0x%02X, Info rc=%d rev=%02X%02X%02X%02X\r\n",
+           (unsigned)s_addr, rc, (unsigned)rev[0], (unsigned)rev[1],
+           (unsigned)rev[2], (unsigned)rev[3]);
+    DebugUartUnlock();
+    if (rc != 0 || rev[2] != 0x60u) {
+        DebugUartLock();
+        printf("[ATECC-C5] REFUSE: Info failed / not an ATECC608B -> nothing written\r\n");
+        DebugUartUnlock();
+        return 0u;
+    }
+
+    /* (3) 快照 */
+    for (blk = 0u; blk < 4u; blk++) {
+        if (DSO_Atecc608b_ReadConfig32(blk, &pre[blk * 32u]) != 0) {
+            DebugUartLock();
+            printf("[ATECC-C5] REFUSE: config read failed at blk=%u -> nothing written\r\n",
+                   (unsigned)blk);
+            DebugUartUnlock();
+            return 0u;
+        }
+    }
+    atecc_c5_dump("pre", pre);
+
+    /* (4) 锁状态护栏 */
+    DebugUartLock();
+    printf("[ATECC-C5] guard: lockval=0x%02X lockcfg=0x%02X slotlock=%02X%02X "
+           "slot5cfg=%02X%02X word7=%02X%02X%02X%02X\r\n",
+           (unsigned)pre[0x56], (unsigned)pre[0x57],
+           (unsigned)pre[0x58], (unsigned)pre[0x59],
+           (unsigned)pre[0x1E], (unsigned)pre[0x1F],
+           (unsigned)pre[0x1C], (unsigned)pre[0x1D],
+           (unsigned)pre[0x1E], (unsigned)pre[0x1F]);
+    DebugUartUnlock();
+    if (pre[0x56] != 0x55u || pre[0x57] != 0x55u ||
+        pre[0x58] != 0xFFu || pre[0x59] != 0xFFu) {
+        DebugUartLock();
+        printf("[ATECC-C5] REFUSE: chip is LOCKED or a slot is locked -> nothing written\r\n");
+        DebugUartUnlock();
+        return 0u;
+    }
+
+    /* (5) 幂等 / 期望值 */
+    if (pre[0x1E] == tgt_lo && pre[0x1F] == tgt_hi) {
+        skipped = 1u;
+    } else if (pre[0x1E] != cur_lo || pre[0x1F] != cur_hi) {
+        DebugUartLock();
+        printf("[ATECC-C5] REFUSE: unexpected SlotConfig[5] -> nothing written\r\n");
+        DebugUartUnlock();
+        return 0u;
+    }
+
+    /* (9a) 改配置前的数据区读对照 */
+    for (i = 0u; i < 32u; i++) {
+        rd[i] = 0u;
+    }
+    rc = DSO_Atecc608b_Exec(ATECC_OP_READ, ATECC_WRITE_MODE_DATA32,
+                            (uint16_t)(ATECC_WRITE_TEST_SLOT * 8u),
+                            NULL, 0u, rd, 32u);
+    DebugUartLock();
+    printf("[ATECC-C5] rd slot5 BEFORE cfg change: rc=%d st=0x%02X %s\r\n",
+           rc, (unsigned)DSO_Atecc608b_LastStatus(),
+           (rc == 32) ? "<32 bytes - data zone readable>" : "(refused)");
+    DebugUartUnlock();
+
+    if (skipped == 0u) {
+        /* (6) 只读验址：P2=7 必须读出 word7 = 8F 8F 8F 8F */
+        for (i = 0u; i < 4u; i++) {
+            probe[i] = 0u;
+        }
+        rc = DSO_Atecc608b_Exec(ATECC_OP_READ, ATECC_WRITE_MODE_CFG4,
+                                ATECC_CFG_SLOT5_WORD, NULL, 0u, probe, 4u);
+        DebugUartLock();
+        printf("[ATECC-C5] rd4 word7: rc=%d data=%02X %02X %02X %02X %s\r\n",
+               rc, (unsigned)probe[0], (unsigned)probe[1],
+               (unsigned)probe[2], (unsigned)probe[3],
+               (rc == 4 && probe[0] == pre[0x1Cu] && probe[1] == pre[0x1Du] &&
+                probe[2] == pre[0x1Eu] && probe[3] == pre[0x1Fu])
+                   ? "<address semantics OK>"
+                   : "<UNEXPECTED - address is NOT a word index>");
+        DebugUartUnlock();
+        if (rc != 4 || probe[0] != pre[0x1Cu] || probe[1] != pre[0x1Du] ||
+            probe[2] != pre[0x1Eu] || probe[3] != pre[0x1Fu]) {
+            DebugUartLock();
+            printf("[ATECC-C5] REFUSE: word-7 read probe failed -> nothing written\r\n");
+            DebugUartUnlock();
+            return 0u;
+        }
+
+        /* (7) 写 */
+        w4[0] = pre[0x1C];
+        w4[1] = pre[0x1D];
+        w4[2] = tgt_lo;
+        w4[3] = tgt_hi;
+        DebugUartLock();
+        printf("[ATECC-C5] DIFF: 0x1E: %02X -> %02X, 0x1F: %02X -> %02X\r\n",
+               (unsigned)pre[0x1E], (unsigned)tgt_lo,
+               (unsigned)pre[0x1F], (unsigned)tgt_hi);
+        DebugUartUnlock();
+        wr = atecc_cfg_write_word7(w4);
+        st = DSO_Atecc608b_LastStatus();
+        DebugUartLock();
+        printf("[ATECC-C5] write word7 mode=0x00 addr=0x0007 data=%02X %02X %02X %02X: "
+               "rc=%d st=0x%02X\r\n",
+               (unsigned)w4[0], (unsigned)w4[1], (unsigned)w4[2], (unsigned)w4[3],
+               wr, (unsigned)st);
+        if (st == 0x03u) {
+            printf("[ATECC-C5]        st=0x03 = parse error -> encoding rejected, NOT retried\r\n");
+        } else if (wr != 0) {
+            printf("[ATECC-C5]        write not acknowledged -> the readback below decides\r\n");
+        }
+        DebugUartUnlock();
+    } else {
+        DebugUartLock();
+        printf("[ATECC-C5] slot5cfg already %02X%02X (target) -> skip write (idempotent)\r\n",
+               (unsigned)tgt_lo, (unsigned)tgt_hi);
+        DebugUartUnlock();
+    }
+
+    /* (8) 回读 + 逐字节校验（以回读为准，不把 rc 当结论） */
+    for (blk = 0u; blk < 4u; blk++) {
+        if (DSO_Atecc608b_ReadConfig32(blk, &post[blk * 32u]) != 0) {
+            DebugUartLock();
+            printf("[ATECC-C5] readback failed at blk=%u -> INCONCLUSIVE, stop\r\n",
+                   (unsigned)blk);
+            DebugUartUnlock();
+            return 0u;
+        }
+    }
+    atecc_c5_dump("post", post);
+
+    for (i = 0u; i < 128u; i++) {
+        want = pre[i];
+        if (skipped == 0u && i == 0x1Eu) {
+            want = tgt_lo;
+        } else if (skipped == 0u && i == 0x1Fu) {
+            want = tgt_hi;
+        }
+        if (post[i] != want) {
+            diffs++;
+            if (diffs <= 8u) {
+                DebugUartLock();
+                printf("[ATECC-C5] diff off=0x%02X exp=%02X got=%02X\r\n",
+                       (unsigned)i, (unsigned)want, (unsigned)post[i]);
+                DebugUartUnlock();
+            }
+            /* 0x36/0x37 = UpdateCount：配置区被写时器件可能自增，属预期，不算异常 */
+            if (i != 0x1Eu && i != 0x1Fu && i != 0x36u && i != 0x37u) {
+                unexpected = 1u;
+            }
+        }
+    }
+    cfg_ok = (uint8_t)((unexpected == 0u &&
+                        ((skipped != 0u) ||
+                         (post[0x1E] == tgt_lo && post[0x1F] == tgt_hi))) ? 1u : 0u);
+    DebugUartLock();
+    printf("[ATECC-C5] verify: 128 bytes, %u diff(s)%s\r\n", (unsigned)diffs,
+           (unexpected != 0u) ? " -> CRITICAL: bytes OUTSIDE 0x1E/0x1F changed!"
+                              : ((cfg_ok != 0u) ? " -> CFG WRITE OK (target bytes confirmed)"
+                                                : " -> target value was NOT reached"));
+    DebugUartUnlock();
+
+    if (unexpected != 0u) {
+        DebugUartLock();
+        printf("[ATECC-C5] STOP: unexpected config changes -> no further writes this run\r\n");
+        DebugUartUnlock();
+        return 0u;
+    }
+
+#if DSO_ATECC_CFG5_REVERT
+    /* 恢复模式：只确认已回出厂值，不跑数据区测试、不再写任何东西 */
+    DebugUartLock();
+    printf("[ATECC-C5] RESULT: cfg=%s -> %s\r\n",
+           (cfg_ok != 0u) ? "OK" : "FAIL",
+           (cfg_ok != 0u) ? "SlotConfig[5] RESTORED to 0x8F8F (factory baseline)"
+                          : "NOT restored - see the diff lines above");
+    printf("[ATECC-C5] revert mode: no data-zone test, nothing else written.\r\n");
+    DebugUartUnlock();
+    (void)wok;          /* 仅实验模式使用；恢复模式下显式标记为"不用"，避免未用告警 */
+    (void)rd_after;
+    return cfg_ok;
+#else
+    /* (9b) 改配置后再读 slot5 */
+    for (i = 0u; i < 32u; i++) {
+        rd[i] = 0u;
+    }
+    rc = DSO_Atecc608b_Exec(ATECC_OP_READ, ATECC_WRITE_MODE_DATA32,
+                            (uint16_t)(ATECC_WRITE_TEST_SLOT * 8u),
+                            NULL, 0u, rd, 32u);
+    rd_after = (uint8_t)((rc == 32) ? 1u : 0u);
+    DebugUartLock();
+    printf("[ATECC-C5] rd slot5 AFTER cfg change: rc=%d st=0x%02X %s\r\n",
+           rc, (unsigned)DSO_Atecc608b_LastStatus(),
+           (rc == 32) ? "<32 bytes - SlotConfig was the gate>" : "(still refused)");
+    DebugUartUnlock();
+
+    /* (10) 写路径测试（槽5 写 A5..C4 再读回；不碰 slot0-4） */
+    if (cfg_ok != 0u) {
+        wok = atecc_verify_write_path();
+    }
+
+    /* (11) 结论 */
+    DebugUartLock();
+    printf("[ATECC-C5] RESULT: cfg=%s rd_after=%s data_write=%s (wp st=0x%02X)\r\n",
+           (cfg_ok != 0u) ? "OK" : "FAIL",
+           (rd_after != 0u) ? "OPEN" : "REFUSED",
+           (wok != 0u) ? "MATCH"
+                       : ((cfg_ok == 0u) ? "SKIP"
+                                         : ((s_wp_last_st == 0x0Fu) ? "REFUSED-0x0F"
+                                                                    : "FAILED")),
+           (unsigned)s_wp_last_st);
+    if (cfg_ok != 0u && wok != 0u) {
+        printf("[ATECC-C5] MEANING: (A) data zone IS writable while UNLOCKED ->\r\n");
+        printf("             SlotConfig was the only gate; NO Lock required for development.\r\n");
+    } else if (cfg_ok != 0u && s_wp_last_st == 0x0Fu) {
+        printf("[ATECC-C5] MEANING: (B) data zone still refused with a permissive SlotConfig\r\n");
+        printf("             -> pre-lock gating; using keys requires Lock (IRREVERSIBLE).\r\n");
+    } else {
+        printf("[ATECC-C5] MEANING: INCONCLUSIVE - see lines above; do not draw a conclusion.\r\n");
+    }
+    printf("[ATECC-C5] REVERT (manual, only while UNLOCKED):\r\n");
+    printf("             Write mode=0x00 addr=0x0007 data=8F 8F 8F 8F\r\n");
+    DebugUartUnlock();
+#endif
+
+    return cfg_ok;
+}
+
+static void atecc_cfg5_task(void *pv)
+{
+    uint8_t i;
+
+    (void)pv;
+    /* 等上电探测任务结束（它负责设定 s_addr / s_at_addr / s_probe_done）。最多 30 s。 */
+    for (i = 0u; i < 300u && s_probe_done == 0u; i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    DebugUartLock();
+    if (s_probe_done == 0u) {
+        printf("[ATECC-C5] REFUSE: probe task did not finish within 30 s\r\n");
+    } else if (s_at_addr == 0u) {
+        printf("[ATECC-C5] REFUSE: probe task found NO ATECC device -> nothing written\r\n");
+    } else {
+        s_addr = s_at_addr;          /* 钉死到探测确认的地址 */
+        printf("[ATECC-C5] probe done: target pinned to 0x%02X (DEV ONLY: no Lock / no OTP)\r\n",
+               (unsigned)s_at_addr);
+    }
+    DebugUartUnlock();
+    if (s_probe_done == 0u || s_at_addr == 0u) {
+        vTaskDelete(NULL);
+    }
+
+    (void)atecc_cfg5_experiment();
+    vTaskDelete(NULL);
+}
+
+void DSO_Atecc608b_Cfg5Exp_Init(void)
+{
+    if (xTaskCreate(atecc_cfg5_task, "AteccC5", 1024, NULL, 3, NULL) != pdPASS) {
+        printf("[BOOT] FAIL AteccC5\r\n");
     }
 }
