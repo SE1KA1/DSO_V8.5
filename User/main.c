@@ -522,6 +522,12 @@ int main(void)
     /* 密码芯片 ATECC608B：一次性上电探测（识别/序列号/锁状态打印） */
     DSO_Atecc608b_Init();
 
+#if DSO_ATECC_PROVISION_ONESHOT
+    /* Stage 2 最小步骤（**开发用**，默认关闭）：一次性预置 Slot0 —— 见 dso_atecc608b.h 说明。
+     * 只在明确要执行预置的那次烧录里把宏置 1；不 Lock、不碰 OTP、不写配置区。 */
+    DSO_Atecc608b_Provision_Init();
+#endif
+
     /* module_telemetry 模块数据上报（sht40 / ina226_u10，spec-00 信封走遥测 TCP） */
     DSO_ModuleUpload_Init();
 

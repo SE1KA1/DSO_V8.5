@@ -45,9 +45,18 @@
 #define ATECC_PROBE_N    3u          /* 探测重试次数 */
 
 /* Config 区关键字节偏移（ATECC608 存储器映射；注意 word n 的字节偏移 = n*4，
- * 故 LockValue/LockConfig 位于 word 0x15 的 byte2/byte3 = 0x56/0x57） */
-#define ATECC_CFG_REV_OFF           0x08u   /* RevNum（608B 低字节 0x60） */
+ * 故 LockValue/LockConfig 位于 word 0x15 的 byte2/byte3 = 0x56/0x57）
+ *
+ * 2026-10-20 修正（此前两处偏移写错，导致旧结论失真）：
+ *   RevNum      = 0x04..0x07（不是 0x08；0x08 起是 SN[4:8]）
+ *   SlotConfig  = 0x14..0x33（不是 0x20；0x20 那段是 SlotConfig[6..15]）
+ *   KeyConfig   = 0x60..0x7F
+ * 实测 0x04..0x07 = 00 00 60 03，0x14..0x1F = 83 20 87 20 8F 20 C4 8F 8F 8F 8F 8F
+ * （= 出厂默认 SlotConfig[0..5] = 0x2083/0x2087/0x208F/0x8FC4/0x8F8F/0x8F8F） */
+#define ATECC_CFG_REV_OFF           0x04u   /* RevNum 0x04..0x07（608B 低字节 0x60） */
 #define ATECC_CFG_SN8_OFF           0x0Cu   /* SN[8] */
+#define ATECC_CFG_SLOTCFG_OFF       0x14u   /* SlotConfig[0]（16 槽 × 2 字节到 0x33） */
+#define ATECC_CFG_KEYCFG_OFF        0x60u   /* KeyConfig[0]（16 槽 × 2 字节到 0x7F） */
 #define ATECC_CFG_LOCK_VALUE_OFF    0x56u   /* LockValue（0x00=已锁） */
 #define ATECC_CFG_LOCK_CONFIG_OFF   0x57u   /* LockConfig（0x00=已锁） */
 #define ATECC_CFG_SLOT_LOCKED_OFF   0x58u   /* SlotLocked[0..1] */
@@ -59,57 +68,69 @@ static uint8_t s_status_valid = 0u;     /* 1=本轮确实从芯片读到了状�
 static uint32_t s_session_bit_us = DSO_ATECC_SESSION_BIT_US;
 /* 当前工作地址：默认 0x60；探测发现实际配置地址（如 0x50/0x64）后更新 */
 static uint8_t s_addr = DSO_ATECC608B_I2C_ADDR;
-/* CRC 约定：0=标准 CRC-16/ARC（正品）；1=位序镜像（本批仿制件，见头文件说明）。
- * 只由 CRC 约定判定臂或上层显式设置，默认 0 —— 对正品器件行为零影响。 */
-static uint8_t s_crc_mirror = 0u;
-/* 镜像约定下"它读 CRC 两字节的次序"未定：0=先低后高（与它自己的发送次序一致，默认），
- * 1=先高后低。仅由判定臂按实测结果设置；标准约定下无意义。 */
-static uint8_t s_crc_swap = 0u;
+/* 上电探测任务是否已跑完 / 它最终确认的 ATECC 地址（0 = 没找到）。
+ * 预置任务**必须**等这两个量稳定后才能动手 —— 否则会打到"体检臂临时改过的 s_addr"上，
+ * 甚至把命令发到别的器件（2026-10-15 实测踩到：参见预置任务的等待逻辑）。 */
+static uint8_t s_probe_done = 0u;
+static uint8_t s_at_addr = 0u;
+/* （2026-10-20）原 `s_crc_mirror`/`s_crc_swap` 已删除：CRC 算法已在 atecc_crc16() 里改正，
+ * 不再需要"镜像约定"这套运行时切换。 */
 /* Read(32 字节) 的**块地址单位**（4 字节字/块）：规格值 8（32B 块 = 8 字，见头文件）。
  * 本片若对 Param2 编码与规格不同，ReadConfig32 首次失败后自动判别一次并改这里。 */
 static uint8_t s_rd32_unit = 8u;
 static uint8_t s_rd32_probed = 0u;   /* 1 = 已判别过，不再自动试 */
 
-/* ---- CRC16（poly 0x8005 反射 0xA001，init 0，LSB 先发） ---- */
-
+/* ---- CRC16：poly 0x8005、init 0、**输入位按 LSB-first 处理** ----
+ * 2026-10-20 用 Microchip 官方库（cryptoauth.dll 导出的 `atCRC`）实测校准：
+ *   atCRC("123456789") = 0xBCDD；atCRC({04,11}) = 0x4333；atCRC(Info 组) = 0x5D03
+ * 等价写法：先对每个输入字节做 8 位反转，再按 **非反射** 的 poly 0x8005 / init 0 计算
+ * （即 BUYPASS 参数 + 位反转输入）。
+ * ⚠️ 旧实现用的是 **CRC-16/ARC（反射多项式 0xA001）**——它满足公开检查向量 0xBB3D，
+ *    但**不是** ATECC 的算法，两者只差一次 16 位反转。这正是 2026-10 期间误判
+ *    "器件只接受镜像 CRC ⇒ 仿制件"的根因；现已改正（官方库与器件逐帧一致）。 */
 static uint16_t atecc_crc16(const uint8_t *d, uint16_t len)
 {
     uint16_t crc = 0u;
     uint16_t i;
     uint8_t j;
+    uint8_t b;
+
     for (i = 0u; i < len; i++) {
-        crc ^= (uint16_t)d[i];
+        b = d[i];
         for (j = 0u; j < 8u; j++) {
-            if ((crc & 0x0001u) != 0u) {
-                crc = (uint16_t)((crc >> 1) ^ 0xA001u);
+            if ((((crc >> 15) & 1u) ^ (uint16_t)(b & 1u)) != 0u) {
+                crc = (uint16_t)((crc << 1) ^ 0x8005u);
             } else {
-                crc = (uint16_t)(crc >> 1);
+                crc = (uint16_t)(crc << 1);
             }
+            b >>= 1;                         /* LSB-first：从最低位开始喂 */
         }
     }
     return crc;
 }
 
-/* CRC 续算（供跨段拼接 [Count]+data 时使用） */
+/* CRC 续算（跨段拼接 Count..Data 时使用；与上面同一算法） */
 static uint16_t atecc_crc16_cont(const uint8_t *d, uint16_t len, uint16_t crc)
 {
     uint16_t i;
     uint8_t j;
+    uint8_t b;
+
     for (i = 0u; i < len; i++) {
-        crc ^= (uint16_t)d[i];
+        b = d[i];
         for (j = 0u; j < 8u; j++) {
-            if ((crc & 0x0001u) != 0u) {
-                crc = (uint16_t)((crc >> 1) ^ 0xA001u);
+            if ((((crc >> 15) & 1u) ^ (uint16_t)(b & 1u)) != 0u) {
+                crc = (uint16_t)((crc << 1) ^ 0x8005u);
             } else {
-                crc = (uint16_t)(crc >> 1);
+                crc = (uint16_t)(crc << 1);
             }
+            b >>= 1;
         }
     }
     return crc;
 }
 
-/* 16 位位序镜像：把 CRC 值的两半各自按位反转并交换字节。
- * 镜像约定下，"我方标准 CRC 的 rev16"正是本批器件期望/回送的数值。 */
+/* 16 位位序反转（**仅诊断用**：矩阵里构造"错误变体"做对照，不参与正常收发） */
 static uint16_t atecc_rev16(uint16_t v)
 {
     uint16_t r = 0u;
@@ -118,19 +139,6 @@ static uint16_t atecc_rev16(uint16_t v)
         r = (uint16_t)((r << 1) | (uint16_t)((v >> i) & 1u));
     }
     return r;
-}
-
-/* 按当前约定把"计算出的标准 CRC"变换成**上/下线实际使用的数值**：
- * 调用方仍按 `(crc & 0xFF) 先发、crc >> 8 后发` 的固定写法使用即可 ——
- * 需要换字节序时，这里把返回值对调，使"先发的低字节"就是该先发的那个。
- * 发送前与校验前都调用它，保证两个方向自洽（同一约定必须同时用于写与读）。 */
-static uint16_t atecc_crc_wire(uint16_t crc)
-{
-    uint16_t w = (s_crc_mirror != 0u) ? atecc_rev16(crc) : crc;
-    if (s_crc_swap != 0u) {
-        w = (uint16_t)((w << 8) | (w >> 8));
-    }
-    return w;
 }
 
 /* 32 字节读时，第 block 块在 Param2 里的地址（按当前认定的单位） */
@@ -142,16 +150,6 @@ static uint16_t atecc_rd32_addr(uint8_t block)
 uint8_t DSO_Atecc608b_LastStatus(void)
 {
     return s_last_status;
-}
-
-void DSO_Atecc608b_SetCrcMirror(uint8_t on)
-{
-    s_crc_mirror = (on != 0u) ? 1u : 0u;
-}
-
-uint8_t DSO_Atecc608b_CrcMirror(void)
-{
-    return s_crc_mirror;
 }
 
 /* ---- 命令执行（组包 + 状态机轮询 + 响应校验） ---- */
@@ -213,7 +211,7 @@ static int atecc_exec_body(uint8_t opcode, uint8_t p1, uint16_t p2,
     for (i = 0u; i < in_len; i++) {
         group[5u + i] = in[i];
     }
-    crc = atecc_crc_wire(atecc_crc16(group, count - 2u));
+    crc = atecc_crc16(group, count - 2u);
     group[count - 2u] = (uint8_t)(crc & 0xFFu);   /* LSB 先发 */
     group[count - 1u] = (uint8_t)(crc >> 8);
 
@@ -265,7 +263,7 @@ static int atecc_exec_body(uint8_t opcode, uint8_t p1, uint16_t p2,
         s_status_valid = 1u;
 
         crc = atecc_crc16(&first, 1u);            /* CRC 覆盖 [count][status] */
-        crc = atecc_crc_wire(atecc_crc16_cont(&rest[0], 1u, crc));
+        crc = atecc_crc16_cont(&rest[0], 1u, crc);
         if ((uint8_t)(crc & 0xFFu) != rest[1] || (uint8_t)(crc >> 8) != rest[2]) {
             atecc_dump_resp("errgrp crc", first, rest, 3u);
             return DSO_ATECC_ERR_CRC;
@@ -288,7 +286,7 @@ static int atecc_exec_body(uint8_t opcode, uint8_t p1, uint16_t p2,
     }
     /* CRC 覆盖 [count]+data（共 count-2 字节）；尾两字节为收到的 CRC */
     crc = atecc_crc16(&first, 1u);
-    crc = atecc_crc_wire(atecc_crc16_cont(body, data_len, crc));
+    crc = atecc_crc16_cont(body, data_len, crc);
     if ((uint8_t)(crc & 0xFFu) != body[data_len] ||
         (uint8_t)(crc >> 8) != body[data_len + 1u]) {
         atecc_dump_resp("datagrp crc", first, body, data_len + 2u);
@@ -1738,7 +1736,8 @@ static void atecc_diag_perbyte_ack(void)
 /* ---- 诊断：**会话速率扫描**（芯片对 I2C 速率是否敏感）----
  * 对每个档位跑一次完整 Info（Exec 会按 s_session_bit_us 设档并走重发逻辑），
  * 打印 rc/状态。放只在 Info 失败时调用——好片不必付这份代价。
- * 背景：2kHz 会话档只在 2026-09-22 那颗片上成功过；本片从未验证过速率。 */
+ * 背景：早期称"2kHz 会话档只在 2026-09-22 那颗片上成功过"，取证后确认**无同期证据**
+ * （9-22 同期日志为三地址全 NACK），故速率敏感性只以 2026-10-11 的实测为准。 */
 static void atecc_rate_sweep(void)
 {
     static const uint32_t rates[7] = { 500u, 250u, 100u, 50u, 30u, 10u, 5u };
@@ -1824,7 +1823,7 @@ static void atecc_diag_read_cfg(void)
     frame[3] = ATECC_READ32_P1;                     /* Param1：0x80 = 32B 读 / zone=Config */
     frame[4] = 0x00u;
     frame[5] = 0x00u;                               /* Param2 = block0 的地址 0x0000 */
-    crc = atecc_crc_wire(atecc_crc16(&frame[1], 5u));
+    crc = atecc_crc16(&frame[1], 5u);
     frame[6] = (uint8_t)(crc & 0xFFu);
     frame[7] = (uint8_t)(crc >> 8);
 
@@ -1856,141 +1855,271 @@ static void atecc_diag_read_cfg(void)
     DebugUartUnlock();
 }
 
-/* ---- 诊断：**CRC 约定判定臂**（一次性，4+1 帧，<2 s）----
- * 依据（2026-10-11 计算）：本器件的响应尾字节 = 我们标准 CRC-16/ARC 的**位序镜像**：
- *   {04,11}: 我们的 ARC=0xCCC2 → rev16=0x4333，它实测尾字节 33 43  ✔
- *   {04,FF}: 我们的 ARC=0x8042 → rev16=0x4201，它实测尾字节 01 42  ✔
- * 两条互相独立的 16 位匹配（偶然概率 ≈ 2^-32）⇒ 它的 CRC 引擎按镜像位序工作：
- * 我们的**正确**帧在它眼里"CRC 错" → 回 0xFF；它自己的帧我们也验不过。
- * 本臂把 Info 帧的尾两字节换成四种候选，一次看清它接受哪一种：
- *   ① 标准    BA C0 → 预期仍被拒（04 FF …）：对照组
- *   ② 镜像 lo 03 5D → **主预测：被接受**（count 变 07，含 00 00 60 03）
- *   ③ 镜像 hi 5D 03 → 备选（它读 CRC 的字节序未定）
- *   ④ 仅对调  C0 BA → 反证：只换字节序不够
- * ②/③ 被接受 ⇒ 自动切镜像约定 → **重跑 Info 复验**（不过则回退，绝不留坏状态）
- *              → 再用 Read 配置区 block0 泛化确认（第二个命令也通）。
- * 安全：只发 Info(0x30) 与 Read(0x02)（均只读）；word 恒 0x03；不写任何区域、不 Lock。
- * @return 1 = 镜像约定已确认并启用（通信打通）；0 = 未确认（调用方继续跑其余诊断臂）。 */
-static uint8_t atecc_diag_crc_conv(void)
+
+
+/* ---- 诊断：**多命令 CRC 约定对照矩阵**（取证用，一次性）----
+ * 目的：把"镜像 CRC"从"单条 Info 命令的巧合"升级为**多条独立命令的一致规律**。
+ * 做法：取 5 条**合法且只读**的命令（opcode / 参数 / 帧长各不相同），每条发三个变体，
+ *       除最后两个 CRC 字节外**其余字节完全一致**：
+ *         ① std   = 官方算法（标准 CRC-16/ARC，低字节先发）
+ *         ② rev16 = CRC 的**16 位整体反转**
+ *         ③ swap  = CRC 的**两个字节交换**（高字节先发）
+ * 判据只看应答（不要求命令执行成功）：
+ *         `04 FF` = 芯片答"CRC 或其它通信错误" ⇒ 这条帧**被拒**
+ *         其它    = 芯片**收下了**这条帧（随后执行失败也给别的状态码，如 0x00/0x03/0x0F）
+ *         ——这条"看状态字节"的判据是关键：被拒与"被接受但执行失败"能一眼分开。
+ * 安全：只发 Info(0x30) / Read(0x02) / Random(0x1B) / Nonce(0x16 Mode 0x03)；
+ *       Nonce 只写**易失**的 TempKey，不改任何持久状态；word 恒 0x03；不 Lock、不碰 OTP、
+ *       不写配置区/数据槽。数据字节内容任意（只影响执行结果，不影响 CRC 判定）。 */
+static void atecc_diag_crc_matrix(void)
 {
-    /* 候选尾两字节（按发送次序）+ 标签 */
-    static const uint8_t tails[4][2] = {
-        { 0xBAu, 0xC0u },   /* ① 标准（当前发的） */
-        { 0x03u, 0x5Du },   /* ② 镜像值 lo-first  <== 主预测 */
-        { 0x5Du, 0x03u },   /* ③ 镜像值 hi-first  <== 备选 */
-        { 0xC0u, 0xBAu }    /* ④ 仅字节对调 */
-    };
-    static const char *tags[4] = { "standard ", "mirror-lo", "mirror-hi", "swaponly " };
-    uint8_t frame[8];
-    uint8_t raw[6];
-    uint8_t k;
-    uint8_t i;
-    int rc;
-    int acc = -1;                    /* 被接受的候选下标；-1 = 全被拒 */
+    static const uint8_t  op[5] = { 0x30u, 0x1Bu, 0x02u, 0x02u, 0x16u };
+    static const uint8_t  p1[5] = { 0x00u, 0x00u, 0x80u, 0x00u, 0x03u };
+    static const uint8_t  dl[5] = { 0u, 0u, 0u, 0u, 32u };
+    static const char    *nm[5] = { "Info   rev    0x30 P1=00",
+                                    "Random        0x1B P1=00",
+                                    "Read  32B cfg 0x02 P1=80",
+                                    "Read   4B cfg 0x02 P1=00",
+                                    "Nonce 32B     0x16 P1=03" };
+    static const char    *vn[4] = { "std  ", "rev16", "swap ", "word3" };
+    static char ev[3072];
+    uint8_t  group[48];
+    uint8_t  frame[48];
+    uint8_t  raw[10];
+    uint8_t  wb[1];                         /* 网友建议的覆盖：把 word 地址 0x03 也纳入 */
+    uint16_t cnt_ok[4] = { 0u, 0u, 0u, 0u };
+    uint16_t cnt_n[4]  = { 0u, 0u, 0u, 0u };
+    uint16_t any_resp = 0u;                 /* 有任何一帧收到应答才说明"目标地址有器件" */
+    uint16_t crc;
+    uint16_t var;
+    uint16_t wcrc0;
+    uint16_t wc;
+    uint8_t  k;
+    uint8_t  v;
+    uint8_t  i;
+    uint8_t  count;
+    int      n;
+    int      rc;
 
-    DebugUartLock();
-    printf("[ATECC-crc] convention test: is chip tail == rev16(our CRC-16/ARC)? "
-           "4 candidate Info frames follow\r\n");
-    DebugUartUnlock();
+    vTaskDelay(pdMS_TO_TICKS(DSO_ATECC_DIAG_SETTLE_MS));
+    wb[0] = DSO_ATECC608B_WORD_CMD;         /* 0x03 —— 只给第 4 个变体用 */
+    wcrc0 = atecc_crc16(wb, 1u);
 
-    for (k = 0u; k < 4u; k++) {
-        for (i = 0u; i < 6u; i++) {
-            raw[i] = 0u;
+    n = snprintf(ev, sizeof(ev),
+                 "===== ATECC CRC convention: multi-command control test =====\r\n"
+                 "target 7-bit address = 0x%02X (current s_addr)\r\n"
+                 "cmd bytes identical; ONLY the last 2 CRC bytes differ per variant\r\n"
+                 "accepted = reply is NOT the '04 FF' error frame (st 0xFF = CRC/comm error)\r\n",
+                 (unsigned)s_addr);
+
+    for (k = 0u; k < 5u; k++) {
+        count = (uint8_t)(7u + dl[k]);                  /* Count = 7 + 数据长度 */
+        group[0] = count;
+        group[1] = op[k];
+        group[2] = p1[k];
+        group[3] = 0x00u;                               /* Param2 = 0x0000 */
+        group[4] = 0x00u;
+        for (i = 0u; i < dl[k]; i++) {
+            group[5u + i] = (uint8_t)(0xA5u + i);       /* 数据内容任意（不影响 CRC 判定） */
         }
-        frame[0] = DSO_ATECC608B_WORD_CMD;
-        frame[1] = 7u;                    /* Count：ATECC608 的 Info 固定 0x07 */
-        frame[2] = ATECC_OP_INFO;
-        frame[3] = 0x00u;                 /* Param1：0 = Revision */
-        frame[4] = 0x00u;
-        frame[5] = 0x00u;                 /* Param2 = 0x0000 */
-        frame[6] = tails[k][0];
-        frame[7] = tails[k][1];
+        crc = atecc_crc16(group, (uint16_t)(count - 2u));   /* 官方算法（覆盖 Count..Data） */
 
-        (void)DSO_Atecc608b_Wake(NULL, NULL);
-        BSP_I2C_UI_SetBitDelayUs(DSO_ATECC_LA_SLOW_US);   /* 20µs：解码友好且够快 */
-        BSP_I2C_UI_Lock();
-        rc = BSP_I2C_UI_WriteRaw(s_addr, frame, 8u);
-        if (rc == 0) {
-            for (i = 0u; i < 30u; i++) {
-                rc = BSP_I2C_UI_ReadRaw(s_addr, raw, 6u);
-                if (rc == 0) {
-                    break;
+        if (n < (int)sizeof(ev) - 200) {
+            n += snprintf(&ev[n], sizeof(ev) - (size_t)n,
+                          "-- #%u %s  count=0x%02X frame=%u bytes  stdCRC=0x%04X\r\n",
+                          (unsigned)(k + 1u), nm[k], (unsigned)count,
+                          (unsigned)(count + 1u), (unsigned)crc);
+        }
+
+        for (v = 0u; v < 4u; v++) {
+            if (v == 0u) {
+                var = crc;                                          /* ① 官方（覆盖 Count..Data）*/
+            } else if (v == 1u) {
+                var = atecc_rev16(crc);                             /* ② 16 位整体反转 */
+            } else if (v == 2u) {
+                var = (uint16_t)((crc << 8) | (crc >> 8));          /* ③ 两字节交换 */
+            } else {
+                /* ④ 网友建议：把 word 地址 0x03 也纳入 CRC 覆盖，再整体反转。
+                 * 数值上已证明 5/5 都与器件接受的尾字节不符；这里在**硬件上**再闭环一次。 */
+                wc = atecc_crc16_cont(group, (uint16_t)(count - 2u), wcrc0);
+                var = wc;                                           /* 正确算法直接给出 */
+            }
+            group[count - 2u] = (uint8_t)(var & 0xFFu);             /* 低字节先发 */
+            group[count - 1u] = (uint8_t)(var >> 8);
+
+            frame[0] = DSO_ATECC608B_WORD_CMD;
+            for (i = 0u; i < count; i++) {
+                frame[1u + i] = group[i];
+            }
+            for (i = 0u; i < 10u; i++) {
+                raw[i] = 0u;
+            }
+
+            (void)DSO_Atecc608b_Wake(NULL, NULL);
+            BSP_I2C_UI_SetBitDelayUs(DSO_ATECC_LA_SLOW_US);          /* 20µs */
+            BSP_I2C_UI_Lock();
+            rc = BSP_I2C_UI_WriteRaw(s_addr, frame, (uint8_t)(count + 1u));
+            if (rc == 0) {
+                for (i = 0u; i < 20u; i++) {
+                    rc = BSP_I2C_UI_ReadRaw(s_addr, raw, 8u);
+                    if (rc == 0) {
+                        break;
+                    }
+                    bsp_DelayUS(1000u);
                 }
-                bsp_DelayUS(1000u);
+            }
+            BSP_I2C_UI_Unlock();
+            BSP_I2C_UI_SetBitDelayUs(0u);
+
+            cnt_n[v]++;
+            if (rc == 0) {
+                any_resp++;
+            }
+            if (rc == 0 && !(raw[0] == 0x04u && raw[1] == 0xFFu)) {
+                cnt_ok[v]++;
+            }
+            if (n < (int)sizeof(ev) - 160) {
+                n += snprintf(&ev[n], sizeof(ev) - (size_t)n,
+                              "     %s 0x%04X -> tail %02X %02X : resp=%02X %02X %02X %02X  %s\r\n",
+                              vn[v], (unsigned)var,
+                              (unsigned)group[count - 2u], (unsigned)group[count - 1u],
+                              (unsigned)raw[0], (unsigned)raw[1],
+                              (unsigned)raw[2], (unsigned)raw[3],
+                              (rc != 0) ? "[NO RESPONSE]"
+                                        : ((raw[0] == 0x04u && raw[1] == 0xFFu)
+                                               ? "[CRC REJECTED (st=0xFF)]"
+                                               : "[ACCEPTED]"));
+            }
+            bsp_DelayUS(2000u);
+        }
+    }
+
+    /* 追加：**Random 读满 32 字节、连读两次** —— 判读"锁定前测试图案"。
+     * 2026-10-20 更正：数据手册规定，**配置区锁定前** RNG 固定返回 FF FF 00 00 … 的测试
+     * 图案（用于工厂/联调自检），锁定后才输出真随机数。因此"两次完全相同"在未锁器件上是
+     * **预期行为**，不是缺陷。本块据此三分支：未锁=预期；已锁仍相同=真异常（需排查）；
+     * 锁字节读不到=不下结论。只发 Random(0x1B) 只读命令，无害。
+     * ⚠️ 判据仍**先要求"两次读都成功且 count=0x23"**：否则"没器件应答"时缓冲区保持全 0，
+     *    两次自然"相同"（这是无依据的结论，2026-10-14 修）。 */
+    {
+        uint8_t rr[2][34];
+        uint8_t same = 1u;
+        uint8_t pass;
+        uint8_t ok = 1u;                       /* 两次都读成功且 count=0x23 才为 1 */
+        uint8_t cfg2[32];                      /* 配置区 0x40-0x5F（含锁字节） */
+        uint8_t lock_ok = 0u;                  /* 1 = 成功读到锁字节 */
+        uint8_t lv = 0xEEu;                    /* LockValue（0x55=未锁 0x00=已锁） */
+        uint8_t lc = 0xEEu;                    /* LockConfig */
+        const char *verdict;
+
+        for (pass = 0u; pass < 2u; pass++) {
+            count = 7u;
+            group[0] = 7u;
+            group[1] = 0x1Bu;                       /* Random */
+            group[2] = 0x00u;
+            group[3] = 0x00u;
+            group[4] = 0x00u;
+            crc = atecc_crc16(group, 5u);                /* 正确算法（2026-10-20 校准） */
+            group[5] = (uint8_t)(crc & 0xFFu);
+            group[6] = (uint8_t)(crc >> 8);
+            frame[0] = DSO_ATECC608B_WORD_CMD;
+            for (i = 0u; i < 7u; i++) {
+                frame[1u + i] = group[i];
+            }
+            for (i = 0u; i < 34u; i++) {
+                rr[pass][i] = 0u;
+            }
+            (void)DSO_Atecc608b_Wake(NULL, NULL);
+            BSP_I2C_UI_SetBitDelayUs(DSO_ATECC_LA_SLOW_US);
+            BSP_I2C_UI_Lock();
+            rc = BSP_I2C_UI_WriteRaw(s_addr, frame, 8u);
+            if (rc == 0) {
+                for (i = 0u; i < 20u; i++) {
+                    rc = BSP_I2C_UI_ReadRaw(s_addr, rr[pass], 34u);  /* count + 32B + CRC[1] */
+                    if (rc == 0) {
+                        break;
+                    }
+                    bsp_DelayUS(1000u);
+                }
+            }
+            BSP_I2C_UI_Unlock();
+            BSP_I2C_UI_SetBitDelayUs(0u);
+            if (rc != 0 || rr[pass][0] != 0x23u) {
+                ok = 0u;                        /* 没读到合法应答：本轮不产生任何结论 */
+            }
+            bsp_DelayUS(2000u);
+        }
+        for (i = 0u; i < 34u; i++) {
+            if (rr[0][i] != rr[1][i]) {
+                same = 0u;
+                break;
             }
         }
-        BSP_I2C_UI_Unlock();
-        BSP_I2C_UI_SetBitDelayUs(0u);
-
-        /* 判据：首个应答字节不再是 4 字节错误组的 0x04（也不是 0xFF）⇒ 命令被接受 */
-        if (rc == 0 && raw[0] != 0x04u && raw[0] != 0xFFu && acc < 0) {
-            acc = (int)k;
+        /* 锁状态：本函数在配置 dump 之前运行，s_status 还不可用 ⇒ 自己读 0x40-0x5F。
+         * 有了它，结论才能区分"出厂未锁（固定图案 = 预期）"与"已锁仍固定（真异常）"。
+         * 只读，不写任何区。 */
+        if (DSO_Atecc608b_ReadConfig32(2u, cfg2) == 0) {
+            lv = cfg2[ATECC_CFG_LOCK_VALUE_OFF - 0x40u];
+            lc = cfg2[ATECC_CFG_LOCK_CONFIG_OFF - 0x40u];
+            lock_ok = 1u;
         }
-        DebugUartLock();
-        printf("[ATECC-crc] #%u %s tail=%02X %02X -> rd=%d resp=%02X %02X %02X %02X %02X %02X %s\r\n",
-               (unsigned)(k + 1u), tags[k],
-               (unsigned)frame[6], (unsigned)frame[7], rc,
-               (unsigned)raw[0], (unsigned)raw[1], (unsigned)raw[2],
-               (unsigned)raw[3], (unsigned)raw[4], (unsigned)raw[5],
-               (rc == 0 && raw[0] != 0x04u && raw[0] != 0xFFu)
-                   ? "<ACCEPTED>" : "(rejected: 04 FF ..)");
-        DebugUartUnlock();
-        bsp_DelayUS(2000u);
-    }
-
-    if (acc < 0) {
-        DebugUartLock();
-        printf("[ATECC-crc] all 4 tails rejected -> mirror hypothesis FAILED. "
-               "Next: bounded convention sweep, or an independent I2C master.\r\n");
-        DebugUartUnlock();
-        return 0u;
-    }
-
-    DebugUartLock();
-    printf("[ATECC-crc] ACCEPTED by candidate #%u (%s) -> mirror convention CONFIRMED\r\n",
-           (unsigned)(acc + 1), tags[acc]);
-    DebugUartUnlock();
-
-#if DSO_ATECC_CRC_MIRROR
-    /* 切镜像约定并**立即复验**：复验不过就回退，绝不把坏状态留在 s_crc_mirror 上 */
-    s_crc_mirror = 1u;
-    s_crc_swap = (acc == 2) ? 1u : 0u;
-    {
-        uint8_t rv[4] = { 0u, 0u, 0u, 0u };
-        int vrc = DSO_Atecc608b_InfoRevision(rv);
-
-        DebugUartLock();
-        printf("[ATECC-crc] mirror mode ON (swap=%u) -> verify Info rc=%d st=0x%02X "
-               "rev=%02X%02X%02X%02X %s\r\n",
-               (unsigned)s_crc_swap, vrc, (unsigned)DSO_Atecc608b_LastStatus(),
-               (unsigned)rv[0], (unsigned)rv[1], (unsigned)rv[2], (unsigned)rv[3],
-               (vrc == 0) ? "<MIRROR WORKS>" : "(verify FAILED -> revert)");
-        DebugUartUnlock();
-
-        if (vrc != 0) {
-            s_crc_mirror = 0u;
-            s_crc_swap = 0u;
-            return 0u;
+        if (same == 0u) {
+            verdict = "differ (random source looks live)";
+        } else if (lock_ok == 0u) {
+            verdict = "IDENTICAL (lock bytes unread; see [ATECC-CFG] VERDICT)";
+        } else if (lv == 0x55u && lc == 0x55u) {
+            verdict = "IDENTICAL -> MATCHES the documented pre-lock test pattern (expected)";
+        } else if (lv == 0x00u && lc == 0x00u) {
+            verdict = "IDENTICAL on a LOCKED part -> NOT expected; investigate";
         } else {
-            /* 通信已通：同步状态快照，使遥测模块帧立刻反映"在且通"
-             * （Info/Read 不走 atecc_note，故这里显式置位） */
-            s_status.present = 1u;
-            s_status.comm_ok = 1u;
-            s_status.rev[0] = rv[0];
-            s_status.rev[1] = rv[1];
-            s_status.rev[2] = rv[2];
-            s_status.rev[3] = rv[3];
-            /* 泛化确认第二个命令（Read 配置区），并把"Read 为何 ERR_IO"拆成三臂测 */
-            atecc_diag_read_cfg();
-            return 1u;              /* 通信已打通：其余诊断臂无需再跑 */
+            verdict = "IDENTICAL (unexpected lock bytes; no conclusion)";
+        }
+        if (n < (int)sizeof(ev) - 300) {
+            if (ok == 0u) {
+                n += snprintf(&ev[n], sizeof(ev) - (size_t)n,
+                              "-- Random x2: INCONCLUSIVE (no valid response, "
+                              "count=0x%02X/0x%02X) -> says NOTHING about the TRNG\r\n",
+                              (unsigned)rr[0][0], (unsigned)rr[1][0]);
+            } else {
+                n += snprintf(&ev[n], sizeof(ev) - (size_t)n,
+                              "-- Random x2 (pre-lock test-pattern check): count=0x%02X %s\r\n"
+                              "     lockval@56=0x%02X lockcfg@57=0x%02X\r\n"
+                              "     #1 first8=%02X %02X %02X %02X %02X %02X %02X %02X\r\n"
+                              "     #2 first8=%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+                              (unsigned)rr[0][0], verdict,
+                              (unsigned)lv, (unsigned)lc,
+                              (unsigned)rr[0][1], (unsigned)rr[0][2],
+                              (unsigned)rr[0][3], (unsigned)rr[0][4],
+                              (unsigned)rr[0][5], (unsigned)rr[0][6],
+                              (unsigned)rr[0][7], (unsigned)rr[0][8],
+                              (unsigned)rr[1][1], (unsigned)rr[1][2],
+                              (unsigned)rr[1][3], (unsigned)rr[1][4],
+                              (unsigned)rr[1][5], (unsigned)rr[1][6],
+                              (unsigned)rr[1][7], (unsigned)rr[1][8]);
+            }
         }
     }
-#else
+
+    if (n < (int)sizeof(ev) - 160) {
+        if (any_resp == 0u) {
+            /* 全部无应答 ⇒ 本次结果**不能**用来推断芯片行为（2026-10-14 加，此前在"目标地址
+             * 没有器件"的板子上仍打印了 0/5·0/5·0/5 的 VERDICT，容易被误读成"三种约定都不通"）。 */
+            n += snprintf(&ev[n], sizeof(ev) - (size_t)n,
+                          "VERDICT: NO device responded at 0x%02X -> this run says NOTHING "
+                          "about the chip\r\n", (unsigned)s_addr);
+        } else {
+            n += snprintf(&ev[n], sizeof(ev) - (size_t)n,
+                          "VERDICT: std %u/%u accepted | rev16 %u/%u accepted | "
+                          "swap %u/%u accepted | word3 %u/%u accepted\r\n",
+                          (unsigned)cnt_ok[0], (unsigned)cnt_n[0],
+                          (unsigned)cnt_ok[1], (unsigned)cnt_n[1],
+                          (unsigned)cnt_ok[2], (unsigned)cnt_n[2],
+                          (unsigned)cnt_ok[3], (unsigned)cnt_n[3]);
+        }
+    }
     DebugUartLock();
-    printf("[ATECC-crc] DSO_ATECC_CRC_MIRROR=0 -> confirmed but not switching convention\r\n");
+    printf("%s", ev);
     DebugUartUnlock();
-    return 0u;
-#endif
 }
 
 /* ---- 只读：SlotConfig 逐槽解读（"先读后写"的依据） ---- */
@@ -2018,23 +2147,36 @@ void DSO_Atecc608b_DumpSlotConfig(const uint8_t *cfg128)
         }
         cfg = local;
     }
-    /* SlotConfig[0..15] 在 cfg[0x20..0x3F]，每槽 16-bit（按小端组字） */
-    n = sprintf(line, "[ATECC] slotcfg raw(0x20..0x3F):");
+    /* SlotConfig[0..15] 在 cfg[0x14..0x33]，每槽 16-bit（按小端组字）
+     * ⚠️ 2026-10-20 修正：此前基址写成 0x20（那是 SlotConfig[6..15]）⇒ 日志把
+     *    slot6.. 当成 slot0.. 解读，得出过 "Slot0=0x8F9F / WriteConfig=8(Never)"
+     *    的错误结论。实测 Slot0 = 0x2083。 */
+    n = sprintf(line, "[ATECC] slotcfg[0..15] (0x14..0x33, LE word):");
     for (i = 0u; i < 16u; i++) {
-        n += sprintf(line + n, " %02X%02X", cfg[0x20u + 2u * i], cfg[0x20u + 2u * i + 1u]);
-        w[i] = (uint16_t)cfg[0x20u + 2u * i] | ((uint16_t)cfg[0x20u + 2u * i + 1u] << 8);
+        w[i] = (uint16_t)cfg[ATECC_CFG_SLOTCFG_OFF + 2u * i] |
+               ((uint16_t)cfg[ATECC_CFG_SLOTCFG_OFF + 2u * i + 1u] << 8);
+        n += sprintf(line + n, " %04X", (unsigned)w[i]);
     }
     sprintf(line + n, "\r\n");
     DebugUartLock();
     printf("%s", line);
-    /* 文档指定的 5 个关键槽逐槽解读（ReadConfig=b3:0 WriteConfig=b7:4 IsSecret=b15 KeyType=b14:12） */
-    for (i = 0u; i < 5u; i++) {
-        printf("[ATECC] slot%u w=%04X Read=%u Write=%u IsSecret=%u KeyType=%u\r\n",
+    /* 前 6 个槽逐槽解读（slot5 = 写路径测试槽）。**位域按数据手册**（2026-10-15 修正，此前用的是错位域）：
+     *   b15:12 WriteConfig | b11:8 WriteKey | b7 IsSecret | b6 EncryptRead |
+     *   b5 LimitedUse | b4 NoMac | b3:0 ReadKey
+     * ⚠️ **KeyType 不在 SlotConfig 里**，它在 KeyConfig（配置区 0x60-0x7F，每槽 16 位）——
+     *    本函数只打印 KeyConfig 原始字，不做位域解读（避免再给错结论）。 */
+    for (i = 0u; i < 6u; i++) {
+        printf("[ATECC] slot%u w=%04X wrCfg=%u wrKey=%u IsSecret=%u EncRd=%u LimUse=%u "
+               "NoMac=%u RdKey=%u keycfg=%02X%02X\r\n",
                (unsigned)i, (unsigned)w[i],
-               (unsigned)(w[i] & 0x0Fu), (unsigned)((w[i] >> 4) & 0x0Fu),
-               (unsigned)((w[i] >> 15) & 0x01u), (unsigned)((w[i] >> 12) & 0x07u));
+               (unsigned)((w[i] >> 12) & 0x0Fu), (unsigned)((w[i] >> 8) & 0x0Fu),
+               (unsigned)((w[i] >> 7) & 0x01u), (unsigned)((w[i] >> 6) & 0x01u),
+               (unsigned)((w[i] >> 5) & 0x01u), (unsigned)((w[i] >> 4) & 0x01u),
+               (unsigned)(w[i] & 0x0Fu),
+               (unsigned)cfg[ATECC_CFG_KEYCFG_OFF + 2u * i],
+               (unsigned)cfg[ATECC_CFG_KEYCFG_OFF + 2u * i + 1u]);
     }
-    printf("[ATECC] (bits per ATECC608 SlotConfig; if mismatch, trust the raw 0x20..0x3F bytes)\r\n");
+    printf("[ATECC] (wrCfg: 0=Always 8-Never 4-7,12-15=Encrypt; raw bytes above are authoritative)\r\n");
     DebugUartUnlock();
     /* 填入只读状态快照（serial4 = SN[0..3]；0x56=0 已锁数据区，0x57=0 已锁配置区） */
     s_status.serial4[0] = cfg[0x00];
@@ -2052,6 +2194,90 @@ static int atecc_scan_known(uint8_t a)
             a == 0x40u || a == 0x41u || a == 0x44u);
 }
 
+/* **绝不发命令**的地址：EEPROM 类（24Cxx 标准 7-bit 区 0x50-0x57）。
+ * 为什么单列一层护栏：给未知地址发 ATECC 命令 = 往它的 word 0x03 写 8 个字节，
+ * EEPROM 会被写坏。而"连续两次读 NACK 才算命令型"这条启发式**挡不住它** ——
+ * EEPROM 在内部写周期内连读地址也 NACK，两次读正好都 NACK → 被误判成命令型。
+ * 所以对已知 EEPROM 区间**无条件跳过**，不参与任何判定。 */
+static int atecc_never_cmd(uint8_t a)
+{
+    return (a >= 0x50u && a <= 0x57u);
+}
+
+/* 文档状态码（ATECC 表 4-3）：`count=0x04` 组的第二个字节可能取的值 */
+static int atecc_doc_status(uint8_t s)
+{
+    return (s == 0x00u || s == 0x01u || s == 0x03u || s == 0x05u || s == 0x07u ||
+            s == 0x08u || s == 0x0Fu || s == 0x11u || s == 0xEEu || s == 0xFFu);
+}
+
+/* ---- 在**指定地址**上试两种 CRC 约定各发一次 Info（只读）----
+ * 判据只看**应答首字节 count**：0x07 = 被接受（Info 的正常 count），0x04 = 被拒（错误组）。
+ * 这样避免走 Exec（被拒时会重传 3 次、且错误组 CRC 过不了会混淆 rc）。
+ * 不动 s_addr、不改全局 CRC 约定 —— 由调用方决定是否采用。
+ * @return 0 = 被接受（rev4 非 NULL 时写入 4 字节版本号）；-1 = 两种约定都没被接受。 */
+static int atecc_try_info_at(uint8_t addr, uint8_t rev4[4])
+{
+    /* 尾两字节：① 标准 CRC-16/ARC（Info 帧 CRC=0xC0BA -> 先发 BA 后发 C0）
+     *           ② 镜像约定（rev16(0xC0BA)=0x5D03 -> 先发 03 后发 5D） */
+    static const uint8_t tails[2][2] = { { 0xBAu, 0xC0u }, { 0x03u, 0x5Du } };
+    uint8_t frame[8];
+    uint8_t raw[7];
+    uint8_t k;
+    uint8_t i;
+    int wrc;
+    int rrc;
+
+    for (k = 0u; k < 2u; k++) {
+        for (i = 0u; i < 7u; i++) {
+            raw[i] = 0u;
+        }
+        frame[0] = DSO_ATECC608B_WORD_CMD;
+        frame[1] = 7u;                     /* Count：Info 固定 0x07 */
+        frame[2] = ATECC_OP_INFO;
+        frame[3] = 0x00u;                  /* Param1 = 0：Revision */
+        frame[4] = 0x00u;
+        frame[5] = 0x00u;                  /* Param2 = 0x0000 */
+        frame[6] = tails[k][0];
+        frame[7] = tails[k][1];
+
+        BSP_I2C_UI_Lock();
+        rrc = -1;
+        wrc = BSP_I2C_UI_WriteRaw(addr, frame, 8u);
+        if (wrc == 0) {
+            for (i = 0u; i < 20u; i++) {
+                rrc = BSP_I2C_UI_ReadRaw(addr, raw, 7u);   /* 响应 = count + 4 版本 + 2 CRC */
+                if (rrc == 0) {
+                    break;
+                }
+                bsp_DelayUS(1000u);
+            }
+        }
+        BSP_I2C_UI_Unlock();
+
+        if (rrc == 0 && raw[0] == 0x07u) {
+            if (rev4 != NULL) {
+                rev4[0] = raw[1];
+                rev4[1] = raw[2];
+                rev4[2] = raw[3];
+                rev4[3] = raw[4];
+            }
+            DebugUartLock();
+            printf("[ATECC-av] 0x%02X: Info ACCEPTED with %s CRC -> rev=%02X%02X%02X%02X\r\n",
+                   (unsigned)addr, (k == 0u) ? "standard" : "mirror",
+                   (unsigned)raw[1], (unsigned)raw[2], (unsigned)raw[3], (unsigned)raw[4]);
+            DebugUartUnlock();
+            return 0;
+        }
+        DebugUartLock();
+        printf("[ATECC-av] 0x%02X: %s CRC -> first=%02X %s\r\n",
+               (unsigned)addr, (k == 0u) ? "standard" : "mirror  ",
+               (unsigned)raw[0], (rrc != 0) ? "(no response)" : "(rejected)");
+        DebugUartUnlock();
+    }
+    return -1;
+}
+
 /* 上电一次性地址扫描 0x01-0x7F：列出全部 ACK 的 7-bit 地址，并单独标注 3 个候选。
  * 用途：确认 ATECC 究竟在哪个地址（0x60 / 0x35 / 0x36），以及总线上有没有新增器件。
  * 判定档位用快档（5µs）：实测新旧片在 93kHz/200kHz 都能 ACK 地址，扫得快。 */
@@ -2062,6 +2288,7 @@ static void atecc_boot_scan(void)
     uint8_t a60 = 0u;
     uint8_t a35 = 0u;
     uint8_t a36 = 0u;
+    uint8_t a64 = 0u;      /* 0x64：实测遇过的第二种 ATECC 族地址（ATSHA204A 出厂默认） */
     uint32_t saved = BSP_I2C_UI_GetBitDelayUs();
     char list[192];
     int len = 0;
@@ -2078,6 +2305,7 @@ static void atecc_boot_scan(void)
             if (addr == 0x60u) { a60 = 1u; }
             if (addr == 0x35u) { a35 = 1u; }
             if (addr == 0x36u) { a36 = 1u; }
+            if (addr == 0x64u) { a64 = 1u; }
         }
     }
     BSP_I2C_UI_Unlock();
@@ -2089,8 +2317,9 @@ static void atecc_boot_scan(void)
     }
     DebugUartLock();
     printf("[ATECC] addr scan 0x01-0x7F: n=%u ->%s\r\n", (unsigned)n, list);
-    printf("[ATECC] scan cand: 0x60=%s 0x35=%s 0x36=%s\r\n",
-           a60 ? "ACK" : "NACK", a35 ? "ACK" : "NACK", a36 ? "ACK" : "NACK");
+    printf("[ATECC] scan cand: 0x60=%s 0x35=%s 0x36=%s 0x64=%s\r\n",
+           a60 ? "ACK" : "NACK", a35 ? "ACK" : "NACK",
+           a36 ? "ACK" : "NACK", a64 ? "ACK" : "NACK");
     DebugUartUnlock();
 
     /* 对三个候选各跑一次**完整 Info**（组包 + 读响应 + CRC 校验）：
@@ -2117,48 +2346,155 @@ static void atecc_boot_scan(void)
     /* 其余**未知地址**逐个"体检"（全程只读）：
      *   ① 地址不 ACK → 跳过
      *   ② 读 1 字节**能** ACK → 内存映射型（EEPROM 类）→ **跳过**（对它发命令等于写）
-     *   ③ 地址 ACK 但读 NACK → 命令/状态型（密码芯片特征）→ 才送完整 Info 判定
+     *   ③ 地址 ACK 但读 NACK → 命令/状态型（密码芯片特征）→ 才送 Info 判定
      * 注意：早期"R=ok 内存映射型"的分类是在 ACK 采样还有 bug 的时期做的，不可信，故此步重做。
-     * 候选清单里已含 0x60/0x35/0x36（上面已测），这里只补其它地址（如 0x64/0x50/0x7C）。 */
+     * 候选清单里已含 0x60/0x35/0x36（上面已测），这里只补其它地址（如 0x64/0x50/0x7C）。
+     *
+     * 2026-10-11 补三处（目的：查清"不应答的片子是否活着、只是在别的地址"）：
+     *   a) 体检前**先发唤醒脉冲**：ATECC 睡着时地址一律 NACK，不唤醒就永远找不到它。
+     *   b) 命令型候选改用 `atecc_try_info_at()`：**标准与镜像两种 CRC 约定各试一次** ——
+     *      否则同型号的镜像 CRC 器件会被误判成"不应答"。
+     *   c) EEPROM 区间（`atecc_never_cmd`）**无条件跳过**：不再依赖"两次读 NACK"的启发式
+     *      （EEPROM 在内部写周期内连读也 NACK，会被误判成命令型并被写坏）。 */
+#if DSO_ATECC_DIAG_ADDR_VERDICT
     {
         uint8_t a;
-        BSP_I2C_UI_SetBitDelayUs(5u);
+
+        /* a) 整轮扫描前先唤醒一次（无地址字节，安全） */
+        BSP_I2C_UI_Lock();
+        BSP_I2C_UI_WakePulseUs(100u);          /* 内含 2ms 释放等待 */
+        BSP_I2C_UI_Unlock();
+
         for (a = 0x01u; a <= 0x7Fu; a++) {
-            uint8_t b = 0u;
+            uint8_t rb[8];                       /* 读回的字节（纯读，不含任何 word 字节） */
+            uint8_t dummy = 0u;
             uint8_t rv[4] = { 0u, 0u, 0u, 0u };
+            uint8_t n1;
+            uint8_t n2;
+            uint8_t shape = 0u;
+            uint8_t i;
             int pr;
-            int rc;
+            int vrc;
+
+            /* 已知器件（PCAL6524/INA226/SHT40/MCP23017）与三个候选地址不在此列体检。
+             * 注意：EEPROM 区间（`atecc_never_cmd`）**不在这里跳过** —— 它们的**读**要看到
+             * （便于与 0x64 对比），但不许发命令；该谓词已下移到"发送前"那一步。 */
             if (atecc_scan_known(a) || a == 0x60u || a == 0x35u || a == 0x36u) {
                 continue;
             }
+            for (i = 0u; i < 8u; i++) {
+                rb[i] = 0u;
+            }
             BSP_I2C_UI_Lock();
+            BSP_I2C_UI_SetBitDelayUs(5u);
             pr = BSP_I2C_UI_Probe(a) == 0 ? 1 : 0;            /* ① 地址 ACK？ */
+            n1 = 0u;
+            n2 = 0u;
             if (pr != 0) {
-                /* ② **连续两次**读 NACK 才算命令型（内存映射型会稳定 ACK 读）。
-                 * 误判成命令型的代价是给未知器件写 8 字节命令（EEPROM 可能被改），故双重确认。 */
-                if (BSP_I2C_UI_ReadRaw(a, &b, 1u) != 0 &&
-                    BSP_I2C_UI_ReadRaw(a, &b, 1u) != 0) {
-                    pr = 1;                                   /* 命令/状态型 */
-                } else {
-                    pr = 2;                                   /* 内存映射型 */
-                }
+                /* ② 读 8 字节并复核一次。`ReadRaw` = START + (addr|R) + 读，
+                 *    **不发送任何 word/寄存器字节**（已逐行核实 bsp_i2c_ui.c:694-719），
+                 *    所以对 EEPROM/寄存器型器件也无害 —— 这正是"只读体检"的依据。
+                 *    返回值只反映**地址字节**是否被应答（数据字节的 ACK/NACK 由主机产生），
+                 *    故"两次都不应答"= 两次地址读都没人理。保守形状：只要有**一次** ACK
+                 *    就按内存映射型处理，**绝不**给它发命令。 */
+                n1 = (uint8_t)(BSP_I2C_UI_ReadRaw(a, rb, 8u) == 0 ? 1u : 0u);
+                n2 = (uint8_t)(BSP_I2C_UI_ReadRaw(a, &dummy, 1u) == 0 ? 1u : 0u);
+                pr = (n1 == 0u && n2 == 0u) ? 1 : 2;          /* 1=命令型 2=内存映射型 */
             }
+            BSP_I2C_UI_SetBitDelayUs(saved);                  /* 解锁前还原（总线级共享约定） */
             BSP_I2C_UI_Unlock();
-            if (pr == 0 || pr == 2) {
-                continue;                                     /* 无器件 / 内存映射型：不碰 */
+
+            if (pr == 2) {
+                /* **ATECC 帧判定（强判据，不是启发）**：`count=0x04` + 文档状态码，
+                 * 且随后两个字节必须等于 `{count,status}` 的 CRC —— **标准或镜像约定之一**。
+                 * 这里把 CRC 真算一遍再比：随机数据/EEPROM 内容同时撞上
+                 * "合法 count + 文档状态码 + 正确 CRC"的概率约 2^-16，基本可判为 ATECC 帧。
+                 * （本项目实测：新片在 0x60 裸读回 `04 11 33 43`；旧片在 0x64 回同样四字节 ——
+                 *   而 `0x50` 的 EEPROM 回 `FF FF …`，正好当对照。）
+                 * 另：`count=0x07` + 覆盖 count..data 的正确 CRC 也算（Info 的正常应答形状）。 */
+                if (n1 != 0u) {
+                    uint16_t c;
+                    uint8_t clen = 0u;
+                    if (rb[0] == 0x04u && atecc_doc_status(rb[1])) {
+                        clen = 2u;                            /* CRC 覆盖 {count,status} */
+                    } else if (rb[0] == 0x07u) {
+                        clen = 5u;                            /* CRC 覆盖 count + 4 字节数据 */
+                    }
+                    if (clen != 0u) {
+                        c = atecc_crc16(rb, clen);
+                        if ((uint8_t)(c & 0xFFu) == rb[clen] &&
+                            (uint8_t)(c >> 8) == rb[clen + 1u]) {
+                            shape = 1u;                       /* 正确算法自洽 */
+                        }
+                    }
+                }
+                DebugUartLock();
+                if (n1 != 0u) {
+                    printf("[ATECC-av] 0x%02X: addr ACK, read ACK -> memory/register-like, "
+                           "first8=%02X %02X %02X %02X %02X %02X %02X %02X%s\r\n",
+                           (unsigned)a,
+                           (unsigned)rb[0], (unsigned)rb[1],
+                           (unsigned)rb[2], (unsigned)rb[3],
+                           (unsigned)rb[4], (unsigned)rb[5],
+                           (unsigned)rb[6], (unsigned)rb[7],
+                           (shape == 2u) ? "  <ATECC FRAME (CRC ok, MIRROR)>"
+                                         : ((shape == 1u) ? "  <ATECC FRAME (CRC ok, std)>"
+                                                          : ""));
+                } else {
+                    printf("[ATECC-av] 0x%02X: addr ACK, read mixed (n1=NACK n2=ACK) -> "
+                           "memory-like, bytes n/a\r\n", (unsigned)a);
+                }
+                DebugUartUnlock();
+                if (shape == 0u) {
+                    continue;              /* 不像 ATECC 帧 ⇒ 绝不发命令 */
+                }
+                DebugUartLock();
+                printf("[ATECC-av] 0x%02X: ATECC frame (CRC verified) -> treating as "
+                       "ATECC-like, trying both CRC conventions\r\n", (unsigned)a);
+                DebugUartUnlock();
+            } else if (pr == 0) {
+                continue;                                     /* 无器件 */
+            } else {
+                DebugUartLock();
+                printf("[ATECC-av] 0x%02X: addr ACK, read NACK x2 -> command-type; "
+                       "trying both CRC conventions\r\n", (unsigned)a);
+                DebugUartUnlock();
             }
-            s_addr = a;
-            rc = DSO_Atecc608b_InfoRevision(rv);
-            DebugUartLock();
-            printf("[ATECC] probe@0x%02X(cmd-type): rc=%d st=0x%02X rev=%02X%02X%02X%02X %s\r\n",
-                   (unsigned)a, rc, (unsigned)DSO_Atecc608b_LastStatus(),
-                   (unsigned)rv[0], (unsigned)rv[1], (unsigned)rv[2], (unsigned)rv[3],
-                   (rc == 0) ? "<ATECC OK: use this address!>" : "(fail)");
-            DebugUartUnlock();
-            s_addr = DSO_ATECC608B_I2C_ADDR;
+
+            /* ③ 命令型：**发送前**再确认不在"永不发命令"区间（护栏从循环顶部搬到这里） */
+            if (atecc_never_cmd(a)) {
+                DebugUartLock();
+                printf("[ATECC-av] 0x%02X: command-type but in EEPROM range -> "
+                       "NEVER send a command\r\n", (unsigned)a);
+                DebugUartUnlock();
+                continue;
+            }
+
+            /* 命令型候选：再唤醒一次（这类地址很少，开销可忽略），然后两种约定各试一次 */
+            BSP_I2C_UI_Lock();
+            BSP_I2C_UI_WakePulseUs(100u);
+            BSP_I2C_UI_Unlock();
+            BSP_I2C_UI_SetBitDelayUs(DSO_ATECC_SESSION_BIT_US);   /* 20µs：已验证能读回响应 */
+            vrc = atecc_try_info_at(a, rv);
+            BSP_I2C_UI_SetBitDelayUs(saved);
+            if (vrc == 0) {
+                /* 命中：把工作地址切过去，让后续启动流程（配置区 dump / SlotConfig / 自测）
+                 * 自动接管（不在这里直接改 s_status —— 正常路径会填）。 */
+                s_addr = a;
+                DebugUartLock();
+                printf("[ATECC-av] *** ATECC FOUND at 0x%02X (not 0x60) -> s_addr switched ***\r\n",
+                       (unsigned)a);
+                DebugUartUnlock();
+                break;
+            }
         }
-        BSP_I2C_UI_SetBitDelayUs(saved);
     }
+#else
+    /* 宏关掉时避免"未使用函数"告警 */
+    (void)atecc_never_cmd;
+    (void)atecc_try_info_at;
+    (void)atecc_doc_status;
+#endif
 }
 
 static void atecc608b_probe_task(void *pv)
@@ -2181,8 +2517,17 @@ static void atecc608b_probe_task(void *pv)
     atecc_diag_bare_read();
 
     /* 全地址扫描：确认芯片到底在哪个 7-bit 地址（0x60 / 0x35 / 0x36 / 其它），
-     * 以及总线上有没有新增器件；并对候选与"命令型未知地址"各跑一次完整 Info。纯只读。 */
+     * 以及总线上有没有新增器件；并对候选与"命令型未知地址"各跑一次完整 Info。纯只读。
+     * 顺带：命中别处的器件会把 s_addr 切过去（2026-10-13 定案的"旧片"即在 0x64）。 */
     atecc_boot_scan();
+
+#if DSO_ATECC_EVIDENCE_MATRIX
+    /* **多命令 CRC 约定对照矩阵**（取证用）：5 条合法只读命令 × 3 个 CRC 变体，
+     * 除最后两个 CRC 字节外其余字节完全一致 ⇒ 看是否呈现**一致规律**。
+     * 放在地址扫描**之后**：这样它打在已解析出的真实地址（s_addr）上 —— 早期版本打在扫描之前
+     * 的 0x60，在"器件其实在 0x64"的板子上会全程无应答、VERDICT 毫无意义（2026-10-14 修）。 */
+    atecc_diag_crc_matrix();
+#endif
 
 #if DSO_ATECC_DIAG_BATTERY
     /* 方案 1 逐字复刻（tPU→Wake→tWHI→立即探+重试）刻意放在**最早时机**执行，
@@ -2212,33 +2557,9 @@ static void atecc608b_probe_task(void *pv)
                rc, (unsigned)DSO_Atecc608b_LastStatus(),
                (unsigned)rev[0], (unsigned)rev[1],
                (unsigned)rev[2], (unsigned)rev[3],
-               (s_crc_mirror != 0u) ? "mirror" : "std",
+               "spec",
                (rc == 0 && rev[2] == 0x60u) ? "<ATECC608B>" : "(rev?)");
         DebugUartUnlock();
-#if DSO_ATECC_CRC_MIRROR
-        if (rc != 0 && s_crc_mirror == 0u) {
-            /* **快路径判别 CRC 约定**：正品用标准 CRC；本批仿制件用镜像 CRC（见头文件）。
-             * 各试一次即可定论，且**必须立刻复验**：只有镜像帧也被接受才切档，
-             * 否则回退标准（绝不留坏状态）。判定成功后走下面的**正常启动流程**
-             * （Config dump / SlotConfig / device_id / 自测），而不是掉进诊断臂。 */
-            int mrc;
-            DSO_Atecc608b_SetCrcMirror(1u);
-            mrc = DSO_Atecc608b_InfoRevision(rev);
-            DebugUartLock();
-            printf("[ATECC] mirror-CRC retry: rc=%d st=0x%02X rev=%02X%02X%02X%02X %s\r\n",
-                   mrc, (unsigned)DSO_Atecc608b_LastStatus(),
-                   (unsigned)rev[0], (unsigned)rev[1],
-                   (unsigned)rev[2], (unsigned)rev[3],
-                   (mrc == 0) ? "<MIRROR CRC ACCEPTED: crc=mirror from here on>"
-                              : "(mirror also rejected -> back to std)");
-            DebugUartUnlock();
-            if (mrc == 0) {
-                rc = 0;              /* 已切镜像约定，继续正常启动流程 */
-            } else {
-                DSO_Atecc608b_SetCrcMirror(0u);
-            }
-        }
-#endif
         if (rc == 0) {
             /* Config 区 4×32B 全区 dump（偏移语义按 ATECC608 存储器映射核对） */
             uint8_t blk;
@@ -2256,8 +2577,7 @@ static void atecc608b_probe_task(void *pv)
                 /* 打出**失败在哪一块**与芯片状态：blk 是关键信息（0/1/2/3 说明是第几块开始不行，
                  * 也可能是第一块就失败），st=0xFF 是"通信错"、其它值看 ATECC 状态码表。 */
                 printf("[ATECC] config read failed at blk=%u (of 4) st=0x%02X crc=%s\r\n",
-                       (unsigned)blk, (unsigned)DSO_Atecc608b_LastStatus(),
-                       (s_crc_mirror != 0u) ? "mirror" : "std");
+                       (unsigned)blk, (unsigned)DSO_Atecc608b_LastStatus(), "spec");
                 DebugUartUnlock();
             } else {
                 for (blk = 0u; blk < 4u; blk++) {
@@ -2271,14 +2591,32 @@ static void atecc608b_probe_task(void *pv)
                     DebugUartUnlock();
                 }
                 DebugUartLock();
-                printf("[ATECC] sn9=%02X%02X%02X%02X%02X%02X%02X%02X%02X "
-                       "rev@08=%02X lockval@56=%02X lockcfg@57=%02X slotlock@58=%02X%02X\r\n",
+                printf("[ATECC] sn3=%02X%02X%02X%02X rev=%02X%02X%02X%02X sn8=%02X\r\n",
                        cfg[0x00], cfg[0x01], cfg[0x02], cfg[0x03],
-                       cfg[0x04], cfg[0x05], cfg[0x06], cfg[0x07],
-                       cfg[ATECC_CFG_SN8_OFF], cfg[ATECC_CFG_REV_OFF],
+                       cfg[ATECC_CFG_REV_OFF], cfg[ATECC_CFG_REV_OFF + 1u],
+                       cfg[ATECC_CFG_REV_OFF + 2u], cfg[ATECC_CFG_REV_OFF + 3u],
+                       cfg[ATECC_CFG_SN8_OFF]);
+                printf("[ATECC] lockval@56=%02X lockcfg@57=%02X slotlock@58=%02X%02X\r\n",
                        cfg[ATECC_CFG_LOCK_VALUE_OFF], cfg[ATECC_CFG_LOCK_CONFIG_OFF],
                        cfg[ATECC_CFG_SLOT_LOCKED_OFF],
                        cfg[ATECC_CFG_SLOT_LOCKED_OFF + 1u]);
+                /* 2026-10-20：把"配置区是否锁定"一次说清。它是解释 **Random 返回固定
+                 * 图案**、以及**数据区/GenKey 一律 0x0F** 的前提：未锁 = 出厂测试态
+                 * （数据手册规定行为），不是缺陷。三分支里只有第一种允许继续
+                 * 做"锁定前"的只读观察；其余两种必须停下，不得写入任何区。 */
+                if (cfg[ATECC_CFG_LOCK_VALUE_OFF] == 0x55u &&
+                    cfg[ATECC_CFG_LOCK_CONFIG_OFF] == 0x55u) {
+                    printf("[ATECC-CFG] VERDICT: CONFIG ZONE UNLOCKED (0x55/0x55) -> Random\r\n");
+                    printf("             FF FF 00 00... is the DOCUMENTED pre-lock test pattern;\r\n");
+                    printf("             data-zone/GenKey refusals (0x0F) are expected here.\r\n");
+                } else if (cfg[ATECC_CFG_LOCK_VALUE_OFF] == 0x00u &&
+                           cfg[ATECC_CFG_LOCK_CONFIG_OFF] == 0x00u) {
+                    printf("[ATECC-CFG] VERDICT: zones LOCKED (0x00/0x00) -> no config/data\r\n");
+                    printf("             write path exists; do NOT attempt any write.\r\n");
+                } else {
+                    printf("[ATECC-CFG] VERDICT: UNEXPECTED lock bytes -> stop, no conclusion;\r\n");
+                    printf("             do NOT write anything. Send this log.\r\n");
+                }
                 printf("[ATECC] present=1 addr=0x%02X\r\n", (unsigned)s_addr);
                 DebugUartUnlock();
                 /* 走到这里说明 Info 成功 ✓ 下面继续做只读识别与自测 */
@@ -2348,28 +2686,527 @@ static void atecc608b_probe_task(void *pv)
                              : "(still failing -> see diag)");
             DebugUartUnlock();
             if (rc != 0) {
-#if DSO_ATECC_DIAG_CRC_CONV
-                /* **先打决定性的一臂**：CRC 约定判定 —— 由器件自己发出的两条帧反推出
-                 * "它的 CRC 是标准 CRC 的位序镜像"，用 4 个候选尾字节一次验证。
-                 * 一旦确认，通信当场打通，后面的逐字节 ACK / 速率扫描就没意义了，
-                 * 直接跳过（省约 8 s 启动时间，日志也干净）。 */
-                if (atecc_diag_crc_conv() == 0u) {
-#endif
-                    /* 先定位"从哪个字节开始不应答"（最直接的线索） */
-                    atecc_diag_perbyte_ack();
-                    /* 再把响应原样 dump（区分"芯片回错帧"与"我们读错位"） */
-                    atecc_diag_info_raw();
-                    /* 再扫一遍会话速率：本片对速率是否敏感，一次就能看出 */
-                    atecc_rate_sweep();
-#if DSO_ATECC_DIAG_CRC_CONV
-                }
-#endif
+                /* 先定位"从哪个字节开始不应答"；再把响应原样 dump；再扫会话速率 */
+                atecc_diag_perbyte_ack();
+                atecc_diag_info_raw();
+                atecc_rate_sweep();
             }
         }
     }
 
     BSP_I2C_UI_SetBitDelayUs(0u);   /* 恢复默认位延迟（同总线其它器件用） */
+    /* **收尾标记**：本任务结束、s_addr 从此不再变动。预置任务靠这两个量决定目标地址，
+     * 绝不能再靠"猜延时"（2026-10-15 的教训：猜早了会把命令发到没有器件的地址）。 */
+    s_at_addr = s_addr;
+    s_probe_done = 1u;
     vTaskDelete(NULL);
+}
+
+/* ==================== Stage 2 最小步骤：Slot0 预置（**开发用**） ====================
+ * 三步一体、**逐步把关**（任一步不通过，后续**不执行**，不会带着错误前提去写）：
+ *   第1步（**只读**）判定数据区 32 字节访问的 Param1 编码 —— 与已知 4 个配置块比对；
+ *   第2步（**可逆**）往"备用槽"写已知图案再读回 —— 打通写路径；
+ *   第3步 试写 Slot0（内嵌的一次性测试密钥）—— 只看状态字节，被拒即停。
+ * 红线：**不 Lock、不碰 OTP、不写配置区**；写入只发生在备用槽与 Slot0。
+ * ⚠️ 2026-10-20 更正：此前"镜像 CRC 仿制件 / 随机源是桩"的判定**已撤回**（前者是我方 CRC
+ *    变体算错，后者是配置区未锁定的出厂测试态）。下面三段在当前器件上**预期会被拒**
+ *    （未锁 = 数据区写不可用），拒绝是正常行为、不是器件缺陷。 */
+
+/* 一次性测试密钥（**公开测试向量**，私钥明文在固件里 ⇒ 绝不是安全密钥）。
+ * 私钥 = 00 01 02 … 1F；公钥由 PC 端 `cryptography` 库按 P-256 算出（X||Y，大端）。 */
+static const uint8_t k_dev_priv[32] = {
+    0x00u, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u,
+    0x08u, 0x09u, 0x0Au, 0x0Bu, 0x0Cu, 0x0Du, 0x0Eu, 0x0Fu,
+    0x10u, 0x11u, 0x12u, 0x13u, 0x14u, 0x15u, 0x16u, 0x17u,
+    0x18u, 0x19u, 0x1Au, 0x1Bu, 0x1Cu, 0x1Du, 0x1Eu, 0x1Fu
+};
+static const uint8_t k_dev_pub[64] = {
+    0x7Au, 0x59u, 0x31u, 0x80u, 0x86u, 0x0Cu, 0x40u, 0x37u,
+    0xC8u, 0x3Cu, 0x12u, 0x74u, 0x98u, 0x45u, 0xC8u, 0xEEu,
+    0x14u, 0x24u, 0xDDu, 0x29u, 0x7Fu, 0xADu, 0xCBu, 0x89u,
+    0x5Eu, 0x35u, 0x82u, 0x55u, 0xD2u, 0xC7u, 0xD2u, 0xB2u,
+    0xA8u, 0xCAu, 0x25u, 0x58u, 0x0Fu, 0x26u, 0x26u, 0xFEu,
+    0x57u, 0x90u, 0x62u, 0xFFu, 0x1Bu, 0x99u, 0xFFu, 0x91u,
+    0xC2u, 0x4Au, 0x0Du, 0xA0u, 0x6Fu, 0xB3u, 0x2Bu, 0x5Bu,
+    0xE2u, 0x01u, 0x48u, 0xC9u, 0x24u, 0x9Fu, 0x56u, 0x50u
+};
+/* 第1步判定出的"数据区 32 字节读写"Param1 与地址乘数；判定失败则保持初值但不会被使用 */
+static uint8_t s_write_mode = ATECC_WRITE_MODE_DATA32;
+static uint8_t s_data_addr_mul = 8u;      /* 地址 = slot * 本值（8 = slot*8；1 = 直接用槽号） */
+
+/* 预置路径的**统一地址护栏**：只对"上电探测任务最终确认过"的那个地址动手。
+ * 没有它，命令可能被发到"体检臂临时改过的 s_addr"上、甚至别的器件（写操作！）——
+ * 2026-10-15 实测踩到：靠"猜 6 秒延时"等探测任务，猜早了 ⇒ 帧全发向无器件的 0x60 ⇒ 超时。
+ * 现在改为：等 `s_probe_done` 标志 + 把 `s_addr` 钉死到 `s_at_addr`，并由本函数统一复核。 */
+static int atecc_prov_target_ok(void)
+{
+    if (s_probe_done == 0u || s_at_addr == 0u || s_addr != s_at_addr) {
+        DebugUartLock();
+        printf("[ATECC-P] REFUSE: s_addr=0x%02X, pinned=0x%02X (probe_done=%u)\r\n",
+               (unsigned)s_addr, (unsigned)s_at_addr, (unsigned)s_probe_done);
+        DebugUartUnlock();
+        return 0;
+    }
+    return 1;
+}
+
+/* 写 32 字节到数据区某槽。**Mode 写死在函数内部**（唯一高危点：Mode/zone 用错会把 32 字节
+ * 写进配置区 —— SN/I2C 地址所在块），调用方无从传错。 */
+static int atecc_write_slot32(uint8_t slot, const uint8_t data[32])
+{
+    int rc;
+
+    if (slot > 15u) {
+        return DSO_ATECC_ERR_PARAM;
+    }
+    /* 数据区地址编码：由第1步实测判定（`s_data_addr_mul`） */
+    rc = DSO_Atecc608b_Exec(ATECC_OP_WRITE, s_write_mode,
+                            (uint16_t)((uint16_t)slot * (uint16_t)s_data_addr_mul),
+                            data, 32u, NULL, 0u);
+    if (rc == 0) {
+        return 0;
+    }
+    /* 本片错误组的 CRC 历史上过不了（见 exec_body 内注释）：状态字节在 CRC 校验**之前**
+     * 已被记录 ⇒ `rc=-3 且状态=0x00` 说明芯片其实接受了，否则会把成功误报成失败。 */
+    if (rc == DSO_ATECC_ERR_CRC && DSO_Atecc608b_LastStatus() == 0x00u) {
+        return 0;
+    }
+    return rc;
+}
+
+/* 第1步（**只读**，零写入）：用小矩阵判定"数据区"命令的 Param1 与地址编码。
+ * 两条对照：
+ *   (a) 已知的 Config 32B 读法（0x80、地址 0）必须等于配置块 0 —— 证明判据方法可信；
+ *   (b) 对 **Slot0**（实测 SlotConfig 在 0x14/0x15，出厂值 0x2083）做同样的数据区读 ——
+ *       配置区未锁定时该读预期被拒；若真能读出明文，反而是器件不执行自身配置的证据。
+ * 再对"备用槽"逐一试候选组合（mode × 地址编码），打印 rc / **状态字节** / 前 8 字节：
+ *   命中判据 = 返回 32 字节 **且与 4 个已知配置块都不同**（等于配置块 ⇒ 那是 config 编码，弃用）。
+ * 全部只读；判不出就返回 0，调用方**不许写任何东西**。
+ * @return 1 = 已判定（s_write_mode / s_data_addr_mul 生效）；0 = 判不出（调用方停手） */
+static uint8_t atecc_find_data_zone_mode(void)
+{
+    if (atecc_prov_target_ok() == 0) {
+        return 0u;                       /* 地址没钉死 ⇒ 连"只读探针"都不做 */
+    }
+    /* 候选矩阵：两条 zone 编码说法 × 32B/4B × 两种地址编码 */
+    static const uint8_t pmode[6] = { 0x82u, 0xA0u, 0x02u, 0x20u, 0x82u, 0xA0u };
+    static const uint8_t pmul[6]  = { 8u, 8u, 8u, 8u, 1u, 1u };
+    static const char   *ptag[6]  = { "32B zone@bits1:0 addr=slot*8",
+                                      "32B zone@bits6:4 addr=slot*8",
+                                      "4B  zone@bits1:0 addr=slot*8",
+                                      "4B  zone@bits6:4 addr=slot*8",
+                                      "32B zone@bits1:0 addr=slot  ",
+                                      "32B zone@bits6:4 addr=slot  " };
+    uint8_t cfg[128];
+    uint8_t ctl[32];
+    uint8_t rd[32];
+    uint8_t blk;
+    uint8_t k;
+    uint8_t i;
+    uint8_t same;
+    uint8_t ok = 0u;
+    uint8_t got4 = 0u;                   /* 是否有某个候选给出了 4 字节数据区读 */
+    int rc;
+
+    for (blk = 0u; blk < 4u; blk++) {
+        if (DSO_Atecc608b_ReadConfig32(blk, &cfg[blk * 32u]) != 0) {
+            DebugUartLock();
+            printf("[ATECC-P] step1: config read failed at blk=%u -> abort\r\n", (unsigned)blk);
+            DebugUartUnlock();
+            return 0u;
+        }
+    }
+    /* 对照 (a)：已知 Config 读法必须读回配置块 0 —— 否则比对方法本身不可信 */
+    for (i = 0u; i < 32u; i++) {
+        ctl[i] = 0u;
+    }
+    rc = DSO_Atecc608b_Exec(ATECC_OP_READ, ATECC_READ32_P1, 0x0000u, NULL, 0u, ctl, 32u);
+    if (rc != 32 || memcmp(ctl, cfg, 32u) != 0) {
+        DebugUartLock();
+        printf("[ATECC-P] step1: control (config read) rc=%d mismatch -> abort\r\n", rc);
+        DebugUartUnlock();
+        return 0u;
+    }
+    /* 对照 (b)：秘密槽 Slot0 必须拒绝明文读 */
+    for (i = 0u; i < 32u; i++) {
+        rd[i] = 0u;
+    }
+    rc = DSO_Atecc608b_Exec(ATECC_OP_READ, 0x82u, 0x0000u, NULL, 0u, rd, 32u);
+    DebugUartLock();
+    printf("[ATECC-P] step1 ctrl: read Slot0 (data zone, expected refused pre-lock) -> rc=%d st=0x%02X %s\r\n",
+           rc, (unsigned)DSO_Atecc608b_LastStatus(),
+           (rc >= 0) ? "<WARNING: data slot WAS readable - config/lock state unexpected>" : "<refused (ok)>");
+    DebugUartUnlock();
+    /* 候选矩阵 */
+    for (k = 0u; k < 6u; k++) {
+        for (i = 0u; i < 32u; i++) {
+            rd[i] = 0u;
+        }
+        rc = DSO_Atecc608b_Exec(ATECC_OP_READ, pmode[k],
+                                (uint16_t)((uint16_t)ATECC_WRITE_TEST_SLOT *
+                                           (uint16_t)pmul[k]),
+                                NULL, 0u, rd, 32u);
+        same = 0u;
+        for (blk = 0u; blk < 4u; blk++) {
+            if (rc == 32 && memcmp(rd, &cfg[blk * 32u], 32u) == 0) {
+                same = 1u;               /* 等于某个配置块 ⇒ 这是 config 编码，绝不能用 */
+            }
+        }
+        DebugUartLock();
+        printf("[ATECC-P] step1 #%u mode=0x%02X addr=slot*%u slot%u -> rc=%d st=0x%02X "
+               "first8=%02X %02X %02X %02X %02X %02X %02X %02X  %s | %s\r\n",
+               (unsigned)(k + 1u), (unsigned)pmode[k], (unsigned)pmul[k],
+               (unsigned)ATECC_WRITE_TEST_SLOT, rc,
+               (unsigned)DSO_Atecc608b_LastStatus(),
+               (unsigned)rd[0], (unsigned)rd[1], (unsigned)rd[2], (unsigned)rd[3],
+               (unsigned)rd[4], (unsigned)rd[5], (unsigned)rd[6], (unsigned)rd[7],
+               (same != 0u) ? "<IS A CONFIG BLOCK - REJECT>"
+                            : ((rc == 32) ? "<DATA-ZONE 32B OK>"
+                                          : ((rc == 4) ? "<4B READ OK>" : "(rejected/no reply)")),
+               ptag[k]);
+        DebugUartUnlock();
+        if (rc == 4 && same == 0u) {
+            got4 = 1u;
+        }
+        if (rc == 32 && same == 0u && ok == 0u) {
+            s_write_mode = pmode[k];
+            s_data_addr_mul = pmul[k];
+            ok = 1u;
+        }
+    }
+    DebugUartLock();
+    if (ok != 0u) {
+        printf("[ATECC-P] step1 VERDICT: mode=0x%02X addr=slot*%u -> write/read encoding LOCKED IN\r\n",
+               (unsigned)s_write_mode, (unsigned)s_data_addr_mul);
+    } else if (got4 != 0u) {
+        printf("[ATECC-P] step1 VERDICT: a 4-byte data-zone read works, but NO 32-byte data-zone\r\n");
+        printf("           read was confirmed -> NOT safe to write; nothing written. Send this log.\r\n");
+    } else {
+        printf("[ATECC-P] step1 VERDICT: this part refuses data-zone access for every candidate\r\n");
+        printf("           (st=0x03 parse error, st=0x0F execution error)\r\n");
+        printf("           EXPECTED while the config zone is UNLOCKED (factory state) and/or when\r\n");
+        printf("           the slot's SlotConfig forbids the access -> NOT a device defect.\r\n");
+    }
+    DebugUartUnlock();
+    return ok;
+}
+
+/* 第2步（可逆）：往备用槽写已知图案再读回 —— 打通写路径，且不碰 Slot0/1/2/3/4。
+ * @return 1 = 写→读回一致；0 = 失败 */
+static uint8_t atecc_verify_write_path(void)
+{
+    uint8_t pat[32];
+    uint8_t rb[32];
+    uint8_t i;
+    int rc;
+
+    if (atecc_prov_target_ok() == 0) {
+        return 0u;                       /* 地址没钉死 ⇒ 不许写 */
+    }
+
+    for (i = 0u; i < 32u; i++) {
+        pat[i] = (uint8_t)(0xA5u + i);
+        rb[i] = 0u;
+    }
+    rc = atecc_write_slot32(ATECC_WRITE_TEST_SLOT, pat);
+    DebugUartLock();
+    printf("[ATECC-P] step2 write slot%u: rc=%d st=0x%02X %s\r\n",
+           (unsigned)ATECC_WRITE_TEST_SLOT, rc,
+           (unsigned)DSO_Atecc608b_LastStatus(), (rc == 0) ? "<accepted>" : "(refused/failed)");
+    DebugUartUnlock();
+    if (rc != 0) {
+        return 0u;
+    }
+    rc = DSO_Atecc608b_Exec(ATECC_OP_READ, s_write_mode,
+                            (uint16_t)((uint16_t)ATECC_WRITE_TEST_SLOT *
+                                       (uint16_t)s_data_addr_mul),
+                            NULL, 0u, rb, 32u);
+    DebugUartLock();
+    printf("[ATECC-P] step2 readback: rc=%d first8=%02X %02X %02X %02X %02X %02X %02X %02X %s\r\n",
+           rc, (unsigned)rb[0], (unsigned)rb[1], (unsigned)rb[2], (unsigned)rb[3],
+           (unsigned)rb[4], (unsigned)rb[5], (unsigned)rb[6], (unsigned)rb[7],
+           (rc == 32 && memcmp(pat, rb, 32u) == 0) ? "<MATCH: write path OK>" : "(MISMATCH)");
+    DebugUartUnlock();
+    return (uint8_t)((rc == 32 && memcmp(pat, rb, 32u) == 0) ? 1u : 0u);
+}
+
+/* 选项 2（**默认关**，见头文件 DSO_ATECC_PROV_GENKEY）：数据区访问不可用时，退到**片上 GenKey**
+ * 往 Slot0 造键 —— 它走芯片内部，不需要主机数据区写访问，因此可能仍然可用。
+ * 流程：`AuthSelfTest(allow_genkey=1)`（Nonce→Sign；Sign 失败才 GenKey(Mode 0x04) 再造并重试）
+ *       → 读出公钥 → 打印 挑战/公钥/签名，供 PC 侧用 tools/atecc_verify_signature.py 验签。
+ * ⚠️ 2026-10-20 更正：此前"RNG 是桩"的判定**已撤回** —— 固定图案是配置区未锁定的出厂测试态。
+ *    因此当前（未锁）状态下 GenKey 预期被拒（0x0F）；本函数会**持久写 Slot0**，仅在锁定后才有意义。 */
+static void atecc_prov_genkey_route(void)
+{
+    /* 逐档提速的候选（半周期 µs）：20 = 当前会话档；2µs ≈ 200kHz 是驱动默认档 */
+    static const uint32_t rates[4] = { 20u, 10u, 5u, 2u };    static uint8_t chal[32];
+    static uint8_t sig[64];
+    static uint8_t pub[64];
+    static char chalhex[65];
+    static char sighex[129];
+    static char pubhex[129];
+    uint8_t vok = 0u;
+    uint8_t i;
+    uint8_t k;
+    int rc = -99;
+
+    if (atecc_prov_target_ok() == 0) {
+        return;                          /* 地址没钉死 ⇒ 连 GenKey 也不发 */
+    }
+    for (i = 0u; i < 32u; i++) {
+        chal[i] = (uint8_t)(0x10u + i);        /* 固定挑战；PC 侧必须用同一个值验签 */
+        sig[i] = 0u;
+        pub[i] = 0u;
+    }
+    DSO_Atecc608b_HexUpper(chal, 32u, chalhex);
+
+    DebugUartLock();
+    printf("[ATECC-P] fallback (option 2): ON-CHIP GenKey for Slot0, ascending bit rate\r\n");
+    printf("[ATECC-P] NOTE: while the CONFIG ZONE IS UNLOCKED (factory state) the RNG returns\r\n");
+    printf("           the documented test pattern and GenKey is expected to be REFUSED (0x0F).\r\n");
+    printf("           That is normal pre-lock behaviour, NOT a device defect.\r\n");
+    DebugUartUnlock();
+
+    /* 2026-10-15：首轮 GenKey 回 **st=0xEE（WatchdogAboutToExpire）** —— 那不是"不允许"，而是
+     * "本次操作耗时太久" ⇒ 怀疑**总线太慢**（20µs 半周期 ≈25kHz，而器件支持到 1MHz；且更早
+     * 500µs 档读配置失败、20µs 才成功，同样是"越慢越糟"）⇒ 逐档**提速**重试并把状态打出来。 */
+    for (k = 0u; k < 4u; k++) {
+        s_session_bit_us = rates[k];           /* Exec 会取这个值设总线档 */
+        rc = DSO_Atecc608b_AuthSelfTest(chal, sig, &vok, 1u);   /* 1 = 允许 GenKey(Mode 0x04) */
+        DebugUartLock();
+        printf("[ATECC-P] GenKey @%uus: rc=%d st=0x%02X self_verify=%u %s\r\n",
+               (unsigned)rates[k], rc, (unsigned)DSO_Atecc608b_LastStatus(), (unsigned)vok,
+               (rc == 0) ? "<OK>"
+                         : ((DSO_Atecc608b_LastStatus() == 0xEEu)
+                                ? "(watchdog=too slow -> trying faster)" : "(failed)"));
+        DebugUartUnlock();
+        if (rc == 0) {
+            break;
+        }
+    }
+    s_session_bit_us = DSO_ATECC_SESSION_BIT_US;    /* 还原会话档 */
+    /* 无论成败都再读一次公钥：它若现在能读出来，说明**键其实已经造出来了** */
+    rc = DSO_Atecc608b_GetPubKey64(DSO_ATECC_AUTH_SLOT, pub);   /* Mode 0x00：只重算公钥 */
+    DebugUartLock();
+    printf("[ATECC-P] post-check GetPubKey64(Slot0): rc=%d st=0x%02X %s\r\n",
+           rc, (unsigned)DSO_Atecc608b_LastStatus(),
+           (rc == 0) ? "<A KEY EXISTS IN SLOT0>" : "(no usable key)");
+    DebugUartUnlock();
+    if (rc != 0) {
+        DebugUartLock();
+        printf("[ATECC-P] GenKey route FAILED -> no route can give this part a usable Slot0 key\r\n");
+        DebugUartUnlock();
+        return;
+    }
+    DSO_Atecc608b_HexUpper(sig, 64u, sighex);
+    DSO_Atecc608b_HexUpper(pub, 64u, pubhex);
+    DebugUartLock();
+    printf("[ATECC-P] GenKey route OK -> ECC path is live (Sign + on-chip Verify both passed)\r\n");
+    printf("[ATECC-P] challenge=%s\r\n", chalhex);
+    printf("[ATECC-P] pubkey   =%s\r\n", pubhex);
+    printf("[ATECC-P] signature=%s\r\n", sighex);
+    printf("[ATECC-P] verify on PC:\r\n");
+    printf("  python tools/atecc_verify_signature.py --pubkey %s --challenge %s --signature %s\r\n",
+           pubhex, chalhex, sighex);
+    DebugUartUnlock();
+}
+
+int DSO_Atecc608b_ProvisionSlot0(const uint8_t priv[32], const uint8_t pub_expect[64])
+{
+    uint8_t cfg[128];
+    uint8_t rev[4];
+    uint8_t pub[64];
+    uint16_t w0;
+    uint8_t i;
+    uint8_t blk;
+    int rc;
+
+    if (priv == NULL || pub_expect == NULL) {
+        return DSO_ATECC_ERR_PARAM;
+    }
+    /* ① 地址守护（关键）：s_addr 是可变的全局量，Exec 没有地址护栏 ⇒ 写错地址可能把命令
+     *    写进别的器件（如 0x50 的配置 EEPROM）。必须确认目标就是**探测任务最终确认过的那个**，
+     *    并复验 Info（下面还会要求 rev[2]==0x60，即确认是 ATECC608B 才继续）。 */
+    if (atecc_prov_target_ok() == 0) {
+        return DSO_ATECC_ERR_PARAM;
+    }
+    for (i = 0u; i < 4u; i++) {
+        rev[i] = 0u;
+    }
+    rc = DSO_Atecc608b_InfoRevision(rev);
+    if (rc != 0 || rev[2] != 0x60u) {
+        DebugUartLock();
+        printf("[ATECC-P] REFUSE: Info rc=%d rev=%02X%02X%02X%02X (not an ATECC608B reply)\r\n",
+               rc, (unsigned)rev[0], (unsigned)rev[1], (unsigned)rev[2], (unsigned)rev[3]);
+        DebugUartUnlock();
+        return DSO_ATECC_ERR_EXEC;
+    }
+    /* ② 写前预检：锁状态 + 槽权限（全部只读） */
+    for (blk = 0u; blk < 4u; blk++) {
+        if (DSO_Atecc608b_ReadConfig32(blk, &cfg[blk * 32u]) != 0) {
+            DebugUartLock();
+            printf("[ATECC-P] REFUSE: config read failed at blk=%u\r\n", (unsigned)blk);
+            DebugUartUnlock();
+            return DSO_ATECC_ERR_IO;
+        }
+    }
+    /* SlotConfig[0] 在 cfg[0x14..0x15]（2026-10-20 修正；此前误用 0x20/0x21
+     * ⇒ 打印出来的是 SlotConfig[6]，导致 "Slot0=0x8F9F" 之类错误结论） */
+    w0 = (uint16_t)((uint16_t)cfg[ATECC_CFG_SLOTCFG_OFF] |
+                    ((uint16_t)cfg[ATECC_CFG_SLOTCFG_OFF + 1u] << 8));
+    DebugUartLock();
+    printf("[ATECC-P] preflight: lockval@56=%02X lockcfg@57=%02X slotlocked=%02X%02X "
+           "keycfg0=%02X%02X slot0cfg=%04X writecfg=%u\r\n",
+           (unsigned)cfg[0x56u], (unsigned)cfg[0x57u],
+           (unsigned)cfg[0x58u], (unsigned)cfg[0x59u],
+           (unsigned)cfg[ATECC_CFG_KEYCFG_OFF], (unsigned)cfg[ATECC_CFG_KEYCFG_OFF + 1u],
+           (unsigned)w0,
+           (unsigned)((cfg[ATECC_CFG_SLOTCFG_OFF + 1u] >> 4) & 0x0Fu));
+    DebugUartUnlock();
+    if (cfg[0x57u] != 0x55u || cfg[0x56u] != 0x55u) {
+        DebugUartLock();
+        printf("[ATECC-P] REFUSE: chip is LOCKED (this path never writes a locked chip)\r\n");
+        DebugUartUnlock();
+        return DSO_ATECC_ERR_EXEC;
+    }
+    if ((cfg[0x58u] & 0x01u) != 0u) {
+        DebugUartLock();
+        printf("[ATECC-P] REFUSE: Slot0 is slot-locked\r\n");
+        DebugUartUnlock();
+        return DSO_ATECC_ERR_EXEC;
+    }
+    /* ③ 幂等：若槽里已有密钥且公钥与期望一致 ⇒ 跳过写入（重复上电天然安全） */
+    for (i = 0u; i < 64u; i++) {
+        pub[i] = 0u;
+    }
+    if (DSO_Atecc608b_GetPubKey64(DSO_ATECC_AUTH_SLOT, pub) == 0 &&
+        memcmp(pub, pub_expect, 64u) == 0) {
+        DebugUartLock();
+        printf("[ATECC-P] Slot0 already holds the expected key -> skip write\r\n");
+        DebugUartUnlock();
+        return 0;
+    }
+    /* ④ 试写（唯一写入动作） */
+    rc = atecc_write_slot32(DSO_ATECC_AUTH_SLOT, priv);
+    DebugUartLock();
+    printf("[ATECC-P] step3 write Slot0: rc=%d st=0x%02X %s\r\n",
+           rc, (unsigned)DSO_Atecc608b_LastStatus(),
+           (rc == 0) ? "<accepted>" : "<REFUSED by chip>");
+    if (rc == DSO_ATECC_ERR_EXEC || (rc != 0 && DSO_Atecc608b_LastStatus() != 0x00u)) {
+        printf("[ATECC-P] NOTE: st=0x0F here is EXPECTED: with the config zone UNLOCKED the part\r\n");
+        printf("         refuses data-zone writes by design; SlotConfig[0] wrCfg is %u.\r\n",
+               (unsigned)((cfg[ATECC_CFG_SLOTCFG_OFF + 1u] >> 4) & 0x0Fu));
+        printf("         Nothing was changed. This is NOT a device defect.\r\n");
+    }
+    DebugUartUnlock();
+    if (rc != 0) {
+        return rc;
+    }
+    /* ⑤ 读回公钥比对（Slot0 的 IsSecret=1 ⇒ 私钥不可读，只能这样验证） */
+    for (i = 0u; i < 64u; i++) {
+        pub[i] = 0u;
+    }
+    rc = DSO_Atecc608b_GetPubKey64(DSO_ATECC_AUTH_SLOT, pub);
+    if (rc != 0) {
+        DebugUartLock();
+        printf("[ATECC-P] readback pubkey failed rc=%d st=0x%02X\r\n",
+               rc, (unsigned)DSO_Atecc608b_LastStatus());
+        DebugUartUnlock();
+        return rc;
+    }
+    {
+        char hx[129];
+        DSO_Atecc608b_HexUpper(pub, 64u, hx);
+        DebugUartLock();
+        printf("[ATECC-P] readback pubkey=%s\r\n", hx);
+        printf("[ATECC-P] step3 VERDICT: %s\r\n",
+               (memcmp(pub, pub_expect, 64u) == 0)
+                   ? "<MATCH: Slot0 provisioned, ECC path live>"
+                   : "<MISMATCH: written key not taking effect / non-standard ECC>");
+        DebugUartUnlock();
+    }
+    return (memcmp(pub, pub_expect, 64u) == 0) ? 0 : DSO_ATECC_ERR_VERIFY;
+}
+
+static void atecc_prov_task(void *pv)
+{
+    uint8_t i;
+    int rc;
+
+    (void)pv;
+    /* **等上电探测任务真正结束**（不再猜延时 —— 2026-10-15 就是猜早了才把帧发到无器件的地址）：
+     * 它负责设定 s_addr、在本片上打开镜像 CRC 约定，并在结束前写好 s_at_addr / s_probe_done。
+     * 最多等 30 s。 */
+    for (i = 0u; i < 300u && s_probe_done == 0u; i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    DebugUartLock();
+    if (s_probe_done == 0u) {
+        printf("[ATECC-P] REFUSE: probe task did not finish within 30 s\r\n");
+    } else if (s_at_addr == 0u) {
+        printf("[ATECC-P] REFUSE: probe task found NO ATECC device -> nothing will be written\r\n");
+    } else {
+        s_addr = s_at_addr;          /* 钉死到探测确认的地址（此后无人再改它）*/
+        printf("[ATECC-P] probe done: target 7-bit address pinned to 0x%02X\r\n",
+               (unsigned)s_at_addr);
+    }
+    DebugUartUnlock();
+    if (s_probe_done == 0u || s_at_addr == 0u) {
+        vTaskDelete(NULL);           /* 没有可信目标 ⇒ 什么都不做 */
+    }
+
+    DebugUartLock();
+    printf("===== ATECC Stage-2 minimal provisioning (DEV ONLY) =====\r\n");
+    printf("CONTEXT: CONFIG ZONE UNLOCKED (factory default). Per the datasheet the part is in\r\n");
+    printf("         pre-lock test mode: Random returns a fixed test pattern and data-zone /\r\n");
+    printf("         GenKey are refused. This is EXPECTED, not a defect. Throwaway test data\r\n");
+    printf("         only. No Lock / no OTP / no config-zone write in this path.\r\n");
+    DebugUartUnlock();
+
+    if (atecc_find_data_zone_mode() == 0u) {
+        DebugUartLock();
+        printf("[ATECC-P] step1 failed: data-zone access unavailable (expected pre-lock) -> host\r\n");
+        printf("           write route impossible in the current state; see [ATECC-CFG] VERDICT\r\n");
+        DebugUartUnlock();
+#if DSO_ATECC_PROV_GENKEY
+        atecc_prov_genkey_route();
+#else
+        DebugUartLock();
+        printf("[ATECC-P] NOTHING was written. Option 2 (on-chip GenKey) is implemented but OFF:\r\n");
+        printf("           set DSO_ATECC_PROV_GENKEY to 1 and reflash to try it. NOTE: pre-lock the\r\n");
+        printf("           device answers 0x0F (execution error) by design -- see [ATECC-CFG] VERDICT.\r\n");
+        DebugUartUnlock();
+#endif
+        DebugUartLock();
+        printf("[ATECC-P] done (step1 abort path)\r\n");
+        DebugUartUnlock();
+        vTaskDelete(NULL);
+    }
+    if (atecc_verify_write_path() == 0u) {
+        DebugUartLock();
+        printf("[ATECC-P] abort after step2 (Slot0 untouched)\r\n");
+        DebugUartUnlock();
+        vTaskDelete(NULL);
+    }
+    rc = DSO_Atecc608b_ProvisionSlot0(k_dev_priv, k_dev_pub);
+    DebugUartLock();
+    printf("[ATECC-P] done rc=%d. If Slot0 was refused: check [ATECC-CFG] VERDICT first --\r\n", rc);
+    printf("           an UNLOCKED config zone refuses data writes by design. Next step is a\r\n");
+    printf("           config-zone policy decision (still unlocked), NOT a Lock and NOT a new part.\r\n");
+    DebugUartUnlock();
+    vTaskDelete(NULL);
+}
+
+void DSO_Atecc608b_Provision_Init(void)
+{
+    /* **1024 字栈**（同探测任务）：Exec 会嵌套 group/body/frame 三个 155B 缓冲，
+     * 绝不能在 512 字的命令任务上跑这条路径。任务跑完自删，堆即回收。 */
+    if (xTaskCreate(atecc_prov_task, "AteccW", 1024, NULL, 3, NULL) != pdPASS) {
+        printf("[BOOT] FAIL AteccW\r\n");
+    } else {
+        /* 开机标记：有它 ⇒ 本次固件**确实**编进了预置任务（否则一条 [ATECC-P] 都不会有）*/
+        printf("[ATECC-P] provisioning task created (DEV ONLY: no Lock / no OTP / no cfg write)\r\n");
+    }
 }
 
 void DSO_Atecc608b_Init(void)
