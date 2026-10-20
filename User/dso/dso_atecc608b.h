@@ -188,12 +188,19 @@ extern "C" {
  *   4) 跑现有写路径测试（槽5 写图案再读回）判定数据区在未锁状态下是否可写。
  * 红线：**不发送 Lock**、**不碰 OTP**、不改其它任何配置字节、失败即停不重试。
  * ⚠️ Mode=0x00 是"4 字节 + Config zone"；Param2=7 是**字号**（不是字节偏移 0x1C，
- *    后者会解码成 block3/word4 从而写到 0x70-0x73，且可能不报错）。 */
-#define DSO_ATECC_CFG5_ONESHOT     1u
+ *    后者会解码成 block3/word4 从而写到 0x70-0x73，且可能不报错）。
+ *
+ * **结果（2026-10-20 实测）**：配置写成功（128 字节回读 **0 差异**），但 slot5 已放宽为
+ * `0x0000` 后，数据区**读与写仍回 `0x0F`** ⇒ 闸门是"配置区未锁定"，**不是** SlotConfig。
+ * 用这颗片做密钥/签名必须先 `Lock(0x17)`（不可逆）；无纯固件绕法。
+ * 器件已写回出厂值 `0x8F8F`，ONESHOT 复位为 0。详见 `Markdown/ATECC608B_结论_配置区未锁定.md`。 */
+#define DSO_ATECC_CFG5_ONESHOT     0u
 #define ATECC_WRITE_MODE_CFG4      0x00u
 #define ATECC_CFG_SLOT5_WORD       0x0007u
-/* 1 = 本次运行执行**恢复**：把 word7 写回出厂值 `8F 8F 8F 8F`（即 SlotConfig[5]=0x8F8F），
- * 不跑数据区测试；已是出厂值则跳过（幂等，可放心反复上电）。0 = 执行原实验（改成 0x0000）。 */
+/* 1 = 执行**恢复**：把 word7 写回出厂值 `8F 8F 8F 8F`（SlotConfig[5]=0x8F8F），不跑数据区测试；
+ * 已是出厂值则跳过（幂等）。0 = 执行原实验（改成 0x0000）。
+ * ⚠️ 2026-10-20 实验已完成并回滚，**CFG5_ONESHOT 已复位为 0** ⇒ 当前固件不会创建该任务、
+ *    不会写配置区。保留 REVERT=1 只是"万一重新打开 ONESHOT"时的安全默认值。 */
 #define DSO_ATECC_CFG5_REVERT      1u
 
 #if (DSO_ATECC_CFG5_ONESHOT != 0u) && (DSO_ATECC_PROVISION_ONESHOT != 0u)
