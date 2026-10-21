@@ -356,8 +356,8 @@ def _cmd_flow(args) -> int:
                      data.get("perm")))
             print("=> full authorization chain works on this device")
             return 0
-    except DeviceError as exc:
-        print("device error:", exc)
+    except (DeviceError, AuthError) as exc:
+        print("flow stopped:", exc)
         return 5
 
 

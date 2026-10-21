@@ -45,11 +45,38 @@ class Store:
 
     # ---- persistence -----------------------------------------------------
     def save(self) -> None:
+        """Atomic write, with a fallback for Windows file-lock hiccups.
+
+        On Windows `os.replace` can fail with WinError 5 while an antivirus or
+        the search indexer holds the destination open for a few milliseconds.
+        Retry briefly, then fall back to rewriting the file in place (which
+        needs no delete/rename permission).
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps(self.data, indent=1, sort_keys=True),
-                       encoding="utf-8")
-        os.replace(tmp, self.path)
+        payload = json.dumps(self.data, indent=1, sort_keys=True)
+        tmp = self.path.with_name("%s.%d.tmp" % (self.path.name, os.getpid()))
+        tmp.write_text(payload, encoding="utf-8")
+
+        last: OSError | None = None
+        for attempt in range(8):
+            try:
+                os.replace(tmp, self.path)
+                return
+            except OSError as exc:          # WinError 5 / 32: transient lock
+                last = exc
+                time.sleep(0.05 * (1 + attempt))
+
+        try:
+            with open(self.path, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return
+        except OSError:
+            pass
+        raise last if last is not None else RuntimeError("cannot save store")
 
     def next_seq(self) -> int:
         self.data["seq"] += 1
