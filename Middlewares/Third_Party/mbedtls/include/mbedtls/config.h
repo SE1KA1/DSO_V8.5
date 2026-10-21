@@ -22,6 +22,9 @@
 #define MBEDTLS_PLATFORM_C
 #define MBEDTLS_PLATFORM_MEMORY
 #define MBEDTLS_MEMORY_BUFFER_ALLOC_C
+/* Enables mbedtls_memory_buffer_alloc_{max,cur}_get() so the firmware can
+ * report the real arena peak after the deepest call. DEV-only overhead. */
+#define MBEDTLS_MEMORY_DEBUG
 
 /* ---- bignum / curve (P-256 only) ---- */
 #define MBEDTLS_BIGNUM_C

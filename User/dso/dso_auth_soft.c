@@ -20,6 +20,9 @@
 #include "dso_atecc608b.h"          /* DSO_Atecc608b_DeviceId16 */
 #include "debug_uart_lock.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include "mbedtls/platform.h"
 #include "mbedtls/bignum.h"
 #include "mbedtls/ecp.h"
@@ -34,6 +37,9 @@ static unsigned char s_arena[4096];
 
 static mbedtls_ecp_group s_grp;
 static int s_inited = 0;
+static uint8_t s_res_after_sign = 0u;
+static uint8_t s_res_after_verify = 0u;
+static uint8_t s_boot = 1u;          /* 1 until Init finishes (selftest is not a real call) */
 static char s_login[16] = "NO_LICENSE";
 
 /* Known-answer vector (generated on the PC with the same public test key).
@@ -54,6 +60,35 @@ static const uint8_t k_selftest_sig[64] = {
     0xB9u, 0xEAu, 0x2Du, 0xC5u, 0x3Bu, 0xBBu, 0x78u, 0x00u,
     0xE1u, 0xF4u, 0xD6u, 0x89u, 0x58u, 0x2Eu, 0xEEu, 0xD3u
 };
+
+/* ===================================================================== */
+/* Resource probing (Stage 2C: verify the stack/arena budget once)        */
+/* ===================================================================== */
+
+/**
+ * One-line resource report for the CURRENT task. Call it right after the
+ * deepest operation so the watermark has seen the worst case.
+ */
+static void report_resources(const char *tag)
+{
+    size_t max_used = 0u;
+    size_t max_blocks = 0u;
+    size_t cur_used = 0u;
+    size_t cur_blocks = 0u;
+
+    mbedtls_memory_buffer_alloc_max_get(&max_used, &max_blocks);
+    mbedtls_memory_buffer_alloc_cur_get(&cur_used, &cur_blocks);
+
+    DebugUartLock();
+    printf("[AUTH-SW] %s: stack_free=%u words, heap_free=%u B (min %u B), "
+           "arena_max=%u B/%u blk, arena_cur=%u B\r\n",
+           tag,
+           (unsigned)uxTaskGetStackHighWaterMark(NULL),
+           (unsigned)xPortGetFreeHeapSize(),
+           (unsigned)xPortGetMinimumEverFreeHeapSize(),
+           (unsigned)max_used, (unsigned)max_blocks, (unsigned)cur_used);
+    DebugUartUnlock();
+}
 
 /* ===================================================================== */
 /* Curve operations                                                      */
@@ -123,6 +158,12 @@ int DSO_AuthSoft_SignDigest(const uint8_t digest[32], uint8_t sig[64])
     mbedtls_mpi_free(&r);
     mbedtls_mpi_free(&s);
     mbedtls_mpi_free(&priv);
+
+    /* Worst-case stack of the `auth_start` path, measured on the real task. */
+    if (s_boot == 0u && s_res_after_sign == 0u && rc == DSO_AUTH_OK) {
+        s_res_after_sign = 1u;
+        report_resources("after sign");
+    }
     return rc;
 }
 
@@ -318,6 +359,10 @@ int DSO_AuthSoft_VerifyLicense(const char *token, DSO_AuthLicense *out)
     /* Time is NOT enforced on-device (no RTC/SNTP): `nb`/`na` are reported up
      * and the server stays authoritative. */
     (void)strcpy(s_login, "AUTHORIZED");
+    if (s_res_after_verify == 0u) {
+        s_res_after_verify = 1u;
+        report_resources("after license verify");
+    }
     return DSO_AUTH_OK;
 }
 
@@ -375,5 +420,7 @@ int DSO_AuthSoft_Init(void)
            (rc == DSO_AUTH_OK) ? "sign=OK verify=OK" : "FAILED",
            (unsigned)sizeof(s_arena));
     DebugUartUnlock();
+    report_resources("after selftest");
+    s_boot = 0u;
     return rc;
 }
