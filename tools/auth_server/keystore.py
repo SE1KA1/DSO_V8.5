@@ -13,13 +13,20 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import (
-    decode_dss_signature,
-    encode_dss_signature,
-)
+try:
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import (
+        decode_dss_signature,
+        encode_dss_signature,
+    )
+except ImportError as _exc:                          # pragma: no cover
+    raise ImportError(
+        "the DEV auth service needs the `cryptography` package. The repo's "
+        ".venv does NOT include it -- run with the system Python (the one that "
+        "works for tools/atecc_verify_signature.py), or `pip install cryptography`."
+    ) from _exc
 
 CURVE = ec.SECP256R1()
 

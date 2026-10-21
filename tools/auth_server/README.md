@@ -5,6 +5,14 @@
 
 协议格式与安全边界见 **`Markdown/设备授权协议_v0.md`**。
 
+## 运行环境（先看这条）
+
+- **必须在仓库根目录执行**（`cd D:\DSO_V8.5`）：`python -m tools.…` 要求根目录在 `sys.path` 上。
+  在 `tools/` 里执行会报 `No module named 'tools'`。
+- **用系统 Python，不要用仓库的 `.venv`**：`.venv` 里没有 `cryptography`（只有 `cryptoauthlib`）。
+  系统 Python（`tools/atecc_verify_signature.py` 能跑的那个）已装 `cryptography`。
+- 若想从任意目录跑测试，也可以直接执行脚本：`python D:\DSO_V8.5\tools\auth_server\e2e_test.py`。
+
 ## 快速开始
 
 ```bash
