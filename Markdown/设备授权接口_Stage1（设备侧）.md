@@ -3,6 +3,11 @@
 > 依据 `Markdown/STM32H743 + ATECC608B-SSHDA-T + LCMXO2 FPGA 远程学生设备授权体系.md`。
 > **本阶段边界（非破坏）**：不写 ATECC 配置区、不写数据槽、不 Lock、不碰 OTP。设备侧只做
 > **只读识别 + 片内签名/验签**（私钥永不出片）。服务器（CA / License 签发 / 用户库）由后端实现。
+>
+> ⚠️ **2026-10-21 状态**：服务器侧的协议与实现见 **`Markdown/设备授权协议_v0.md`**
+> 与 `tools/auth_server/`（Stage 2A，已完成）。器件仍处于**出厂未锁定态**，
+> `auth_start` 回 `rc=-4 st=0x0F`，能力被判定为 `identity_only` —— 详见
+> `Markdown/ATECC608B_结论_配置区未锁定.md`。
 > 芯片地址：ATECC608B-SSHDA-T，**7-bit `0x60`**（线上写 `0xC0` / 读 `0xC1`），PB7=SDA / PB8=SCL。
 
 ---
@@ -133,7 +138,9 @@ except InvalidSignature:
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **Stage 1** | DeviceID 派生上报；片内挑战签名自测（Nonce/Sign/Verify）；SlotConfig 只读解读；遥测帧；3 条命令 | **本轮已实现** |
-| **Stage 2** | Slot1 写 DeviceID；Slot2 写 CA 公钥；Slot3 存 License；Slot4 存 HMAC 密钥；`atecc.auth_verify`；Slot0 若空则 GenKey；**可能需改配置区**（按 SlotConfig 解读结果决定） | 待用户批准（每次涉及写入前先给结论） |
+| **Stage 2A** | **协议 v0 + PC 侧授权服务 + 模拟设备闭环**（挑战/证明/License 签发与校验/能力协商），见 `Markdown/设备授权协议_v0.md`、`tools/auth_server/` | **2026-10-21 完成**（零硬件风险） |
+| **Stage 2B** | 设备侧预置：改配置区 → `Lock(Config)` → 写 Slot0（GenKey）/ CA 公钥到 **slot 8–15** → `atecc.auth_verify` | **阻塞**：2026-10-20 实测确认不 Lock 数据区不可访问；需用户明确批准不可逆操作 |
+| **Stage 2C** | 备选：设备侧软件密钥过渡（micro-ecc/mbedTLS），把整链在真机跑通、芯片不参与 | 未做 |
 | **Stage 3（量产，不可逆）** | `Lock(Config)`、`Lock(Data+OTP)`、OTP 写入、ROP/PCROP、关闭 SWD、HSM 侧 CA 私钥 | 需 HSM/CA 配合 + 逐项单独批准 |
 
 **已知依赖/缺口（需要其它侧配合）**

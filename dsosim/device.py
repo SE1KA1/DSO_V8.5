@@ -12,6 +12,7 @@ import random
 import time
 from dataclasses import dataclass, field
 
+from .atecc import AteccSimulator
 from .awg import AWGState, WAVE_KINDS
 from .errors import DSOError, DSOErrorCode
 from .protocol import TelemetryFrame, ControlCommand, AckFrame
@@ -95,6 +96,11 @@ class DSOSimulator:
         # INA226 current (mA) — over-current clears LED2 (bit1), mirrors
         # dso_ina226.h: Rshunt 100mΩ, alert 600 LSB ≈ 15mA
         self.current_ma = 6       # normal ≈5-8 mA
+
+        # ATECC608B model (authorization protocol). Default = "provisioned"
+        # (software key + CA pubkey); set dev.atecc.provisioned=False to mimic
+        # an unlocked part (rc=-4 st=0x0F), which is the real board today.
+        self.atecc = AteccSimulator()
         self.current_ok = 1
 
         # status / telemetry
@@ -290,6 +296,13 @@ class DSOSimulator:
                 ack.data = {"sw": self.sw_bits, "led": self.led_bits,
                             "temp": self.temp_dezi, "temp_ok": self.temp_ok,
                             "cur_ma": self.current_ma}
+            elif cmd.startswith("atecc."):
+                # 授权协议（见 Markdown/设备授权协议_v0.md）。
+                # 模拟器默认"已预置"；provisioned=False 时复制真机未锁定态的错误形态。
+                result, error, data = self.atecc.handle(cmd, params)
+                ack.result = result
+                ack.error = error
+                ack.data = data
             elif cmd == "get_config":
                 pass  # no-op, config is exposed via read_frame()
             elif cmd == "reboot":

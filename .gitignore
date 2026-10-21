@@ -1,4 +1,4 @@
-﻿# Keil uVision build outputs
+# Keil uVision build outputs
 Project/*/Objects/
 Project/*/Listings/
 *.uvoptx
@@ -42,3 +42,6 @@ pc_switch_panel/.venv/
 .idea/
 dsosim/.venv/
 *.pyc
+
+# DEV authorization service state (CA private key, ledger, tokens)
+tools/auth_server/.state/

@@ -30,6 +30,9 @@ class _Handler(socketserver.StreamRequestHandler):
                 try:
                     cmd = ControlCommand.from_json(line)
                     ack = dev.send_cmd(cmd.cmd, cmd.params)
+                    # 真机回显请求的 seq（v0.9 靠 seq 配对）；模拟器的
+                    # DSOSimulator.send_cmd 用的是它自己的计数器，这里改回请求值。
+                    ack.seq = cmd.seq
                     self.wfile.write((ack.to_json() + "\r\n").encode("utf-8"))
                     self.wfile.flush()
                 except Exception as e:  # noqa: BLE001 - keep server alive on bad frame

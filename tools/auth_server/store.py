@@ -1,0 +1,177 @@
+"""JSON-backed state for the DEV authorization service (stdlib only).
+
+Single-process by design: the firmware accepts one TCP client at a time, so
+the service is a short-lived CLI/library, not a daemon. Writes are atomic
+(tmp file + os.replace) so a crash cannot leave half a file behind.
+
+Nothing in here is a production user database: passwords use PBKDF2 with a
+per-user salt (never bare SHA-256), and no secret is ever logged.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+from pathlib import Path
+
+PBKDF2_ITERATIONS = 600_000
+SCHEMA_VERSION = 1
+
+
+def _default_state() -> dict:
+    return {
+        "version": SCHEMA_VERSION,
+        "seq": 0,
+        "users": {},        # user -> {salt, hash, iter}
+        "devices": {},      # device_id -> {pubkey, kid, capability, registered_at}
+        "bindings": [],     # {user, dev, nb, na, revoked}
+        "challenges": {},   # digest_hex -> {dev, user, session, expires}
+        "licenses": {},     # jti -> {lic, user, dev, na, revoked}
+    }
+
+
+class Store:
+    def __init__(self, path: str | os.PathLike):
+        self.path = Path(path)
+        if self.path.exists():
+            self.data = json.loads(self.path.read_text(encoding="utf-8"))
+            if self.data.get("version") != SCHEMA_VERSION:
+                raise RuntimeError("unsupported store version")
+        else:
+            self.data = _default_state()
+            self.save()
+
+    # ---- persistence -----------------------------------------------------
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self.data, indent=1, sort_keys=True),
+                       encoding="utf-8")
+        os.replace(tmp, self.path)
+
+    def next_seq(self) -> int:
+        self.data["seq"] += 1
+        return self.data["seq"]
+
+    # ---- users -----------------------------------------------------------
+    def add_user(self, user: str, password: str) -> None:
+        salt = os.urandom(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                     salt, PBKDF2_ITERATIONS)
+        self.data["users"][user] = {
+            "salt": salt.hex(),
+            "hash": digest.hex(),
+            "iter": PBKDF2_ITERATIONS,
+        }
+        self.save()
+
+    def check_password(self, user: str, password: str) -> bool:
+        rec = self.data["users"].get(user)
+        if not rec:
+            return False
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                     bytes.fromhex(rec["salt"]), rec["iter"])
+        return _const_eq(digest.hex(), rec["hash"])
+
+    def has_user(self, user: str) -> bool:
+        return user in self.data["users"]
+
+    # ---- devices ---------------------------------------------------------
+    def register_device(self, dev: str, pubkey_hex: str, kid: str = "k1",
+                        capability: str = "provisioned") -> None:
+        """Out-of-band/admin enrollment: never call this from an online path."""
+        self.data["devices"][dev] = {
+            "pubkey": pubkey_hex.lower(),
+            "kid": kid,
+            "capability": capability,
+            "registered_at": int(time.time()),
+        }
+        self.save()
+
+    def get_device(self, dev: str) -> dict | None:
+        return self.data["devices"].get(dev)
+
+    def set_capability(self, dev: str, capability: str) -> None:
+        rec = self.data["devices"].get(dev)
+        if rec is None:
+            raise RuntimeError("unknown device")
+        rec["capability"] = capability
+        self.save()
+
+    # ---- bindings (user <-> device) --------------------------------------
+    def add_binding(self, user: str, dev: str, nb: int, na: int) -> None:
+        self.data["bindings"].append(
+            {"user": user, "dev": dev, "nb": nb, "na": na, "revoked": False})
+        self.save()
+
+    def find_binding(self, user: str, dev: str, now_off: int) -> dict | None:
+        for b in self.data["bindings"]:
+            if (b["user"] == user and b["dev"] == dev and not b["revoked"]
+                    and b["nb"] <= now_off <= b["na"]):
+                return b
+        return None
+
+    def revoke_bindings(self, user: str, dev: str) -> None:
+        for b in self.data["bindings"]:
+            if b["user"] == user and b["dev"] == dev:
+                b["revoked"] = True
+        self.save()
+
+    # ---- challenges ------------------------------------------------------
+    def put_challenge(self, digest_hex: str, dev: str, user: str,
+                      session: str, expires: int) -> None:
+        self.data["challenges"][digest_hex] = {
+            "dev": dev, "user": user, "session": session, "expires": expires}
+        self.save()
+
+    def count_open(self, dev: str, now_off: int) -> int:
+        return sum(1 for c in self.data["challenges"].values()
+                   if c["dev"] == dev and c["expires"] >= now_off)
+
+    def take_challenge(self, digest_hex: str) -> dict | None:
+        """Consume a challenge — it is single-use even if the proof fails."""
+        entry = self.data["challenges"].pop(digest_hex, None)
+        if entry is not None:
+            self.save()
+        return entry
+
+    def expire_challenges(self, now_off: int) -> None:
+        stale = [k for k, c in self.data["challenges"].items()
+                 if c["expires"] < now_off]
+        if stale:
+            for k in stale:
+                del self.data["challenges"][k]
+            self.save()
+
+    # ---- licenses --------------------------------------------------------
+    def record_license(self, jti: str, lic: str, user: str, dev: str, na: int) -> None:
+        if jti in self.data["licenses"]:
+            raise RuntimeError("duplicate jti")
+        self.data["licenses"][jti] = {
+            "lic": lic, "user": user, "dev": dev, "na": na, "revoked": False}
+        self.save()
+
+    def get_license(self, jti: str) -> dict | None:
+        return self.data["licenses"].get(jti)
+
+    def revoke_license(self, jti: str) -> None:
+        rec = self.data["licenses"].get(jti)
+        if rec is None:
+            raise RuntimeError("unknown jti")
+        rec["revoked"] = True
+        self.save()
+
+    def is_revoked(self, jti: str) -> bool:
+        rec = self.data["licenses"].get(jti)
+        return bool(rec and rec["revoked"])
+
+
+def _const_eq(a: str, b: str) -> bool:
+    if len(a) != len(b):
+        return False
+    diff = 0
+    for x, y in zip(a.encode(), b.encode()):
+        diff |= x ^ y
+    return diff == 0

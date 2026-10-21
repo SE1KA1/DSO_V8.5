@@ -1,4 +1,9 @@
 STM32H743 + ATECC608B-SSHDA-T + LCMXO2 FPGA 远程学生设备授权体系
+
+> **⚠️ 实现现状（2026-10-21）**：本文是**设计目标**，其中若干假设在当前器件上不可直接落地
+> （Slot2 放不下 CA 公钥、Slot3 放不下 License、ATECC 无时钟、未锁定前不能签名等）。
+> 可执行版本与逐条差异见 **`Markdown/设备授权协议_v0.md` §8**；
+> 器件状态见 `Markdown/ATECC608B_结论_配置区未锁定.md`。
 核心思路：ATECC608B 作为硬件安全根，负责设备身份、签名、密钥保护；STM32H743 做业务逻辑与通信；LCMXO2 提供硬件随机源 + FPGA 硬件身份；服务器做用户 - 设备绑定与授权签发；不把用户密码明文下放到 STM32Flash。 你的 16 位设备编号：Eep210251A08891（物理硬件固定编号） + FPGA/STM32H743 真随机码，拼接组成 16 位设备唯一 ID（DeviceID），这个 DeviceID 作为设备全局身份标识，存入 ATECC608B 安全 EEPROM，禁止明文裸存 STM32 Flash。
 1. 硬件连接与 ATECC608B 槽位规划（I2C 接口推荐）
 ATECC608B-SSHDA-T I2C 接 STM32H743，STM32 再与 LCMXO2-4000HC FPGA 通信（SPI）。 ATECC608B 16 个 Slot 分配（TrustFLEX 模式）：
