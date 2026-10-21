@@ -83,6 +83,7 @@ class AteccSimulator:
         return "error", "unknown cmd %s" % cmd, None
 
     def _auth_verify(self, params: dict) -> tuple[str, str, dict | None]:
+        """Mirror the firmware's reply shapes exactly, including data.code."""
         token = params.get("token", "")
         from tools.auth_server import proto
         from tools.auth_server.keystore import verify_digest
@@ -90,18 +91,25 @@ class AteccSimulator:
             payload, sig = proto.split_token(token)
             fields = proto.parse_payload(payload)
         except proto.TokenError as exc:
-            return "error", "bad token: %s" % exc, None
+            return ("error", "license rejected rc=-2 (malformed token: %s)" % exc,
+                    {"code": -2})
         if fields["dev"] != self.device_id:
-            return "error", "token is bound to another device", None
+            return ("error",
+                    "license rejected rc=-3 (token bound to another device)",
+                    {"code": -3})
         if not self.ca_pub_hex:
-            return "error", "no CA public key provisioned (Slot2 empty)", None
+            return ("error",
+                    "license rejected rc=-4 (no CA public key provisioned)",
+                    {"code": -4})
         try:
             ca_pub = bytes.fromhex(self.ca_pub_hex)
         except ValueError:
-            return "error", "CA public key is not hex", None
+            return ("error", "license rejected rc=-4 (CA public key is not hex)",
+                    {"code": -4})
         digest = hashlib.sha256(payload).digest()
         if not verify_digest(ca_pub, digest, sig, require_low_s=True):
-            return "error", "license signature is invalid", None
+            return ("error", "license rejected rc=-4 (signature invalid)",
+                    {"code": -4})
         return "ok", "", {"lic": fields["lic"], "user": fields["user"],
                           "dev": fields["dev"], "na": fields["na"],
                           "perm": fields["perm"]}

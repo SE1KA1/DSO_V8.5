@@ -41,6 +41,9 @@ python -m tools.auth_server.service show-ca --c > User/dso/dso_auth_ca.h
 
 # 8) 一条命令跑完整闭环（真机或 dsosim）
 python -m tools.auth_server.service flow --host 192.168.100.50 --user stu001
+
+# 9) 反向验证：证明设备真的会「拒绝」坏 License（7 个用例）
+python -m tools.auth_server.service negtest --host 192.168.100.50 --user stu001
 ```
 
 > `dso_auth_ca.h` 是**生成文件**：本机 CA 换掉后必须重新生成，否则设备侧会拒绝所有 License。

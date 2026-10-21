@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import secrets
 import sys
@@ -361,6 +362,116 @@ def _cmd_flow(args) -> int:
         return 5
 
 
+def _cmd_negtest(args) -> int:
+    """Prove the *rejection* paths on a live device.
+
+    A module that only ever sees "ok" cannot tell a real check from no check at
+    all, so this issues one good license and a series of deliberately broken
+    ones, then asserts each is refused with the expected error code.
+    """
+    from .device_client import DeviceClient, DeviceError
+
+    svc, _store, ca = _service()
+    pwd = args.password or input("password for %s: " % args.user)
+    rows: list[tuple[str, str, str]] = []
+
+    def record(name: str, ok: bool, detail: str) -> None:
+        rows.append((name, "PASS" if ok else "FAIL", detail))
+
+    try:
+        with DeviceClient(args.host, args.port) as client:
+            ack = client.get_devid()
+            if ack.get("result") != "ok":
+                print("get_devid failed:", ack.get("error"))
+                return 2
+            dev = ack["data"]["device_id"]
+            print("device_id:", dev)
+
+            sid = svc.login(args.user, pwd)
+            challenge = svc.issue_challenge(sid, dev)
+            ack = client.auth_start(challenge)
+            if ack.get("result") != "ok":
+                print("auth_start failed:", ack.get("error"))
+                return 3
+            svc.verify_proof(sid, dev, challenge,
+                             ack["data"]["signature_hex"],
+                             ack["data"]["pubkey_hex"],
+                             ack["data"]["self_verify"])
+
+            def expect(name: str, token: str, codes: tuple[int, ...] | None) -> None:
+                ack = client.auth_verify(token, dev)
+                if ack.get("result") != "error":
+                    record(name, False, "ACCEPTED a broken license!")
+                    return
+                code = ack.get("data", {}).get("code")
+                ok = (codes is None) or (code in codes)
+                record(name, ok, "code=%s %s" % (code, ack.get("error")))
+
+            # --- baseline: a correct license must be accepted -----------------
+            good = svc.issue_license(sid, dev, ttl_s=args.ttl)
+            ack = client.auth_verify(good, dev)
+            record("baseline good license",
+                   ack.get("result") == "ok",
+                   str(ack.get("data", {}).get("lic") or ack.get("error")))
+
+            # --- 1. one byte changed in the signed payload --------------------
+            payload, sig = proto.split_token(good)
+            bad = bytearray(payload)
+            bad[len(bad) // 2] ^= 0x01
+            expect("payload byte flipped", proto.encode_token(bytes(bad), sig),
+                   (-2, -4))
+
+            # --- 2. valid signature from our CA, but another device id --------
+            now = proto.now_offset()
+            other = proto.canonical_payload({
+                "v": 1, "typ": "lic", "lic": "N0002", "user": args.user,
+                "dev": "Eep9999999999999", "nb": now, "na": now + 600,
+                "perm": 1, "jti": secrets.token_hex(8), "kid": ca.kid})
+            expect("license for another device",
+                   proto.encode_token(other, ca.sign_digest(hashlib.sha256(other).digest())),
+                   (-3,))
+
+            # --- 3. correct payload, signed by an impostor CA -----------------
+            rogue = CAKey.generate("k1")
+            expect("signed by another CA",
+                   proto.encode_token(payload, rogue.sign_digest(
+                       hashlib.sha256(payload).digest())), (-4,))
+
+            # --- 4. signature bit flipped -------------------------------------
+            bad_sig = bytearray(sig)
+            bad_sig[10] ^= 0x01
+            expect("signature bit flipped",
+                   proto.encode_token(payload, bytes(bad_sig)), (-4,))
+
+            # --- 5. unknown permission bit (canonical but not allowed) --------
+            # canonical_payload() refuses perm=2 by design, so craft the bytes
+            # directly: the point is that the DEVICE must refuse it too.
+            badperm = json.dumps({
+                "v": 1, "typ": "lic", "lic": "N0003", "user": args.user,
+                "dev": dev, "nb": now, "na": now + 600, "perm": 2,
+                "jti": secrets.token_hex(8), "kid": ca.kid},
+                sort_keys=True, separators=(",", ":")).encode()
+            expect("unknown permission bit",
+                   proto.encode_token(badperm, ca.sign_digest(
+                       hashlib.sha256(badperm).digest())), (-2,))
+
+            # --- 6. not even a token ------------------------------------------
+            expect("malformed token (no separator)", "not-a-token", (-2,))
+    except (DeviceError, AuthError) as exc:
+        print("negtest stopped:", exc)
+        return 5
+
+    width = max(len(n) for n, _, _ in rows) + 2
+    print()
+    print("%-*s %-4s %s" % (width, "case", "res", "detail"))
+    for name, res, detail in rows:
+        print("%-*s %-4s %s" % (width, name, res, detail))
+    failed = [r for r in rows if r[1] != "PASS"]
+    print()
+    print("%d/%d PASS" % (len(rows) - len(failed), len(rows)))
+    return 0 if not failed else 4
+
+
 def _cmd_show_ca(args) -> int:
     """Emit the CA public key as a C header (firmware build-time constant)."""
     _svc, _store, ca = _service()
@@ -427,6 +538,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--c", action="store_true",
                    help="emit User/dso/dso_auth_ca.h content")
     p.set_defaults(func=_cmd_show_ca)
+
+    p = sub.add_parser("negtest",
+                       help="prove the REJECTION paths on a live device")
+    p.add_argument("--host", required=True)
+    p.add_argument("--port", type=int, default=5005)
+    p.add_argument("--user", required=True)
+    p.add_argument("--password", default=None)
+    p.add_argument("--ttl", type=int, default=900)
+    p.set_defaults(func=_cmd_negtest)
 
     p = sub.add_parser("flow",
                        help="run the whole chain against a live device")
