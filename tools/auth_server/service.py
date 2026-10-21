@@ -309,6 +309,58 @@ def _cmd_verify(args) -> int:
     return 0
 
 
+def _cmd_flow(args) -> int:
+    """Run the whole chain against a live device: proof -> license -> verify."""
+    from .device_client import DeviceClient, DeviceError
+
+    svc, store, _ca = _service()
+    pwd = args.password or input("password for %s: " % args.user)
+    try:
+        with DeviceClient(args.host, args.port) as client:
+            ack = client.get_devid()
+            if ack.get("result") != "ok":
+                print("get_devid failed:", ack.get("error"))
+                return 2
+            dev = ack["data"]["device_id"]
+            print("device_id   :", dev)
+            if store.get_device(dev) is None:
+                print("device is NOT registered. Enroll its public key first:")
+                print("  python -m tools.auth_server.service register %s <128-hex pubkey>" % dev)
+                return 2
+
+            sid = svc.login(args.user, pwd)
+            challenge = svc.issue_challenge(sid, dev)
+            print("challenge   :", challenge)
+            ack = client.auth_start(challenge)
+            if ack.get("result") != "ok":
+                print("auth_start FAILED:", ack.get("error"))
+                print("  (an unlocked ATECC answers st=0x0F here; enable")
+                print("   DSO_AUTH_DEV_SOFTKEY in the firmware for the DEV path)")
+                return 3
+            print("signature   :", ack["data"]["signature_hex"][:32], "...")
+            svc.verify_proof(sid, dev, challenge,
+                             ack["data"]["signature_hex"],
+                             ack["data"]["pubkey_hex"],
+                             ack["data"]["self_verify"])
+            print("device proof: OK")
+
+            token = svc.issue_license(sid, dev, ttl_s=args.ttl)
+            print("license     :", token[:40], "... (%d bytes)" % len(token))
+            ack = client.auth_verify(token, dev)
+            if ack.get("result") != "ok":
+                print("auth_verify FAILED:", ack.get("error"))
+                return 4
+            data = ack.get("data", {})
+            print("verify      : OK  lic=%s user=%s na=%s perm=%s"
+                  % (data.get("lic"), data.get("user"), data.get("na"),
+                     data.get("perm")))
+            print("=> full authorization chain works on this device")
+            return 0
+    except DeviceError as exc:
+        print("device error:", exc)
+        return 5
+
+
 def _cmd_show_ca(args) -> int:
     """Emit the CA public key as a C header (firmware build-time constant)."""
     _svc, _store, ca = _service()
@@ -375,6 +427,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--c", action="store_true",
                    help="emit User/dso/dso_auth_ca.h content")
     p.set_defaults(func=_cmd_show_ca)
+
+    p = sub.add_parser("flow",
+                       help="run the whole chain against a live device")
+    p.add_argument("--host", required=True)
+    p.add_argument("--port", type=int, default=5005)
+    p.add_argument("--user", required=True)
+    p.add_argument("--password", default=None)
+    p.add_argument("--ttl", type=int, default=900, help="license TTL seconds")
+    p.set_defaults(func=_cmd_flow)
 
     args = ap.parse_args(argv)
     return args.func(args)

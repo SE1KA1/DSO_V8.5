@@ -38,6 +38,9 @@ python -m tools.auth_server.service verify-license <token> --device Eep21025E269
 
 # 7) 把 CA 公钥生成为固件头文件（Stage 2C 设备侧验签要用）
 python -m tools.auth_server.service show-ca --c > User/dso/dso_auth_ca.h
+
+# 8) 一条命令跑完整闭环（真机或 dsosim）
+python -m tools.auth_server.service flow --host 192.168.100.50 --user stu001
 ```
 
 > `dso_auth_ca.h` 是**生成文件**：本机 CA 换掉后必须重新生成，否则设备侧会拒绝所有 License。
