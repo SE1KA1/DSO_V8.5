@@ -26,7 +26,13 @@ void DSO_Switch_Cmd_Init(void);
  * @param reply_sz reply 缓冲区大小
  * @return 1=本模块已处理（reply 有效）；0=非本模块命令
  */
-int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz);
+/** 命令来源通道。授权类命令要做 ECDSA（软件后端约 3.5KB 栈），只能走 TCP：
+ *  串口任务栈仅 2KB（512 字），在它上面跑会溢出。 */
+#define DSO_SW_CMD_CH_SERIAL   0u
+#define DSO_SW_CMD_CH_ETH      1u
+
+int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz,
+                              uint8_t channel);
 
 /** 应答缓冲建议大小：授权类命令要回 128 字符签名 + 128 字符公钥 + DeviceID，
  *  两个调用点（串口任务 / 以太网命令宏）都应开这么大——**用文件级 static 开**，

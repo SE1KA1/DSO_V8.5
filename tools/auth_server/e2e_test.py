@@ -527,5 +527,28 @@ class TestErrorClassification(unittest.TestCase):
         self.assertEqual(classify_error(""), "other")
 
 
+class TestFirmwareDevKey(unittest.TestCase):
+    """The firmware's shared test key must match the PC's derivation."""
+
+    def test_devkey_matches(self) -> None:
+        src = (Path(__file__).resolve().parents[2] / "User" / "dso"
+               / "dso_devkey.c")
+        if not src.exists():
+            self.skipTest("firmware tree not present")
+        text = src.read_text(encoding="utf-8", errors="replace")
+
+        def array(name: str) -> bytes:
+            m = re.search(name + r"\s*\[[^\]]*\]\s*=\s*\{(.*?)\};", text, re.S)
+            self.assertIsNotNone(m, "missing " + name)
+            return bytes(int(x, 16)
+                         for x in re.findall(r"0x([0-9A-Fa-f]{2})", m.group(1)))
+
+        priv = array("DSO_DEV_PRIV")
+        pub = array("DSO_DEV_PUB")
+        self.assertEqual(priv, bytes(range(32)))
+        from tools.atecc_verify_signature import _pub_from_priv
+        self.assertEqual(pub, _pub_from_priv(priv))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -33,6 +33,7 @@
  * 中文只出现在注释里（注释里被吃掉一个字符无害）。新增打印请沿用 [ATECC-x] 前缀。
  */
 #include "dso_atecc608b.h"
+#include "dso_devkey.h"
 #include "bsp_i2c_ui.h"
 #include "debug_uart_lock.h"
 #include "stm32h7xx_hal.h"   /* HAL_GetTick（Arm 0 上电事实核对） */
@@ -2714,23 +2715,8 @@ static void atecc608b_probe_task(void *pv)
  *    （未锁 = 数据区写不可用），拒绝是正常行为、不是器件缺陷。 */
 
 /* 一次性测试密钥（**公开测试向量**，私钥明文在固件里 ⇒ 绝不是安全密钥）。
- * 私钥 = 00 01 02 … 1F；公钥由 PC 端 `cryptography` 库按 P-256 算出（X||Y，大端）。 */
-static const uint8_t k_dev_priv[32] = {
-    0x00u, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u,
-    0x08u, 0x09u, 0x0Au, 0x0Bu, 0x0Cu, 0x0Du, 0x0Eu, 0x0Fu,
-    0x10u, 0x11u, 0x12u, 0x13u, 0x14u, 0x15u, 0x16u, 0x17u,
-    0x18u, 0x19u, 0x1Au, 0x1Bu, 0x1Cu, 0x1Du, 0x1Eu, 0x1Fu
-};
-static const uint8_t k_dev_pub[64] = {
-    0x7Au, 0x59u, 0x31u, 0x80u, 0x86u, 0x0Cu, 0x40u, 0x37u,
-    0xC8u, 0x3Cu, 0x12u, 0x74u, 0x98u, 0x45u, 0xC8u, 0xEEu,
-    0x14u, 0x24u, 0xDDu, 0x29u, 0x7Fu, 0xADu, 0xCBu, 0x89u,
-    0x5Eu, 0x35u, 0x82u, 0x55u, 0xD2u, 0xC7u, 0xD2u, 0xB2u,
-    0xA8u, 0xCAu, 0x25u, 0x58u, 0x0Fu, 0x26u, 0x26u, 0xFEu,
-    0x57u, 0x90u, 0x62u, 0xFFu, 0x1Bu, 0x99u, 0xFFu, 0x91u,
-    0xC2u, 0x4Au, 0x0Du, 0xA0u, 0x6Fu, 0xB3u, 0x2Bu, 0x5Bu,
-    0xE2u, 0x01u, 0x48u, 0xC9u, 0x24u, 0x9Fu, 0x56u, 0x50u
-};
+ * 定义已移到 `dso_devkey.c`，供 ATECC 预置路径与 DEV 软件后端（Stage 2C）共用，
+ * 避免两边各存一份而漂移。私钥 = 00 01 … 1F；公钥为 X||Y（大端）。 */
 /* 第1步判定出的"数据区 32 字节读写"Param1 与地址乘数；判定失败则保持初值但不会被使用 */
 static uint8_t s_write_mode = ATECC_WRITE_MODE_DATA32;
 static uint8_t s_data_addr_mul = 8u;      /* 地址 = slot * 本值（8 = slot*8；1 = 直接用槽号） */
@@ -3190,7 +3176,7 @@ static void atecc_prov_task(void *pv)
         DebugUartUnlock();
         vTaskDelete(NULL);
     }
-    rc = DSO_Atecc608b_ProvisionSlot0(k_dev_priv, k_dev_pub);
+    rc = DSO_Atecc608b_ProvisionSlot0(DSO_DEV_PRIV, DSO_DEV_PUB);
     DebugUartLock();
     printf("[ATECC-P] done rc=%d. If Slot0 was refused: check [ATECC-CFG] VERDICT first --\r\n", rc);
     printf("           an UNLOCKED config zone refuses data writes by design. Next step is a\r\n");

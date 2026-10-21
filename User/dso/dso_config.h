@@ -325,6 +325,15 @@
 #define DSO_DISABLE_ETS_FOR_SWEEP   1u
 #endif
 
+/* ---- Stage 2C: DEV software P-256 backend (mbedTLS) ----
+ * 1 = 授权命令（get_pubkey / auth_start / auth_verify）走**软件**后端，ATECC 不参与。
+ * 目的：ATECC 未锁定、数据区不可用，先用公开测试密钥把整条授权链在真机跑通。
+ * ⚠️ DEV ONLY：私钥是公开测试密钥（00..1F），**禁止进入量产固件**。
+ * 0 = 保持原样（ATECC 路径）。 */
+#ifndef DSO_AUTH_DEV_SOFTKEY
+#define DSO_AUTH_DEV_SOFTKEY               1u
+#endif
+
 /* Disable internal 100 kHz DAC test source when chasing external high-speed input */
 #ifndef DSO_TESTGEN_ENABLE
 /* 宏定义: DSO_TESTGEN_ENABLE - 编译期开关，用于启用或关闭对应功能。 */

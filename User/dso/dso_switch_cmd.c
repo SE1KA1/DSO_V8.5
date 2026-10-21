@@ -23,6 +23,8 @@
 #include "dso_ina226_u44.h"
 #include "dso_watchdog.h"     /* 远程复位入口 DSO_Watchdog_RequestReboot */
 #include "dso_atecc608b.h"    /* 授权 Stage 1：设备身份 + 片内挑战签名 */
+#include "dso_config.h"       /* DSO_AUTH_DEV_SOFTKEY（Stage 2C 软件后端开关） */
+#include "dso_auth_soft.h"    /* DEV 软件 P-256 后端 */
 #include "bsp.h"              /* stm32h7xx_hal + bsp_uart_fifo（提供 USART_TypeDef/__IO 前置） */
 #include "lwip/netif.h"
 #include "debug_uart_lock.h"
@@ -149,7 +151,8 @@ static int sw_cmd_hex2bin(const char *hex, uint8_t *out, size_t out_max)
 }
 
 /* 分发本体（调用方须持 s_cmd_mtx） */
-static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz)
+static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz,
+                                uint8_t channel)
 {
     char cmd[32];
     int  seq = 0;
@@ -157,6 +160,7 @@ static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz)
     int  on = 0;
 
     if (line == NULL || reply == NULL || reply_sz == 0) return 0;
+    (void)channel;   /* 仅在 DSO_AUTH_DEV_SOFTKEY=1 时用到 */
     if (!json_get_str(line, "cmd", cmd, sizeof(cmd))) return 0;
 
     (void)json_get_int(line, "seq", &seq);   /* 可选，默认 0 */
@@ -258,7 +262,13 @@ static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz)
         char did[DSO_DEVICE_ID_LEN + 1u];
         int rc;
         (void)DSO_Atecc608b_DeviceId16(did);
+#if DSO_AUTH_DEV_SOFTKEY
+        /* DEV 软件后端：公钥是公开测试密钥，不涉及 ATECC */
+        memcpy(pk, DSO_AuthSoft_Pubkey(), 64u);
+        rc = 0;
+#else
         rc = DSO_Atecc608b_GetPubKey64(DSO_ATECC_AUTH_SLOT, pk);
+#endif
         if (rc != 0) {
             snprintf(reply, reply_sz,
                      "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
@@ -299,23 +309,54 @@ static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz)
             return 1;
         }
         (void)DSO_Atecc608b_DeviceId16(did);
+#if DSO_AUTH_DEV_SOFTKEY
+        /* DEV 软件后端：ECDSA 约 3.5KB 栈，只能走 TCP（串口任务栈 2KB） */
+        if (channel != DSO_SW_CMD_CH_ETH) {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.auth_start\",\"result\":\"error\","
+                     "\"error\":\"use the TCP channel for auth (serial task stack is too small)\","
+                     "\"data\":{}}", seq);
+            return 1;
+        }
+        rc = DSO_AuthSoft_SignDigest(chal, sig);
+        if (rc == 0) {
+            vok = (DSO_AuthSoft_VerifyDigest(DSO_AuthSoft_Pubkey(), chal, sig)
+                       == DSO_AUTH_OK) ? 1u : 0u;
+        }
+#else
         /* Nonce(挑战即摘要) -> Sign(Slot0) -> Verify(片内)，全程读+片内运算 */
         rc = DSO_Atecc608b_AuthSelfTest(chal, sig, &vok, 0u);
+#endif
         if (rc != 0) {
+#if DSO_AUTH_DEV_SOFTKEY
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.auth_start\",\"result\":\"error\","
+                     "\"error\":\"soft sign/verify failed rc=%d (backend not initialized?)\","
+                     "\"data\":{\"device_id\":\"%s\"}}",
+                     seq, rc, did);
+#else
             snprintf(reply, reply_sz,
                      "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
                      "\"cmd\":\"atecc.auth_start\",\"result\":\"error\","
                      "\"error\":\"sign/verify failed rc=%d st=0x%02X (Slot0 has no usable ECC key?)\","
                      "\"data\":{\"device_id\":\"%s\"}}",
                      seq, rc, (unsigned)DSO_Atecc608b_LastStatus(), did);
+#endif
             return 1;
         }
         DSO_Atecc608b_HexUpper(sig, 64u, sighex);
+#if DSO_AUTH_DEV_SOFTKEY
+        memcpy(pk, DSO_AuthSoft_Pubkey(), 64u);
+        DSO_Atecc608b_HexUpper(pk, 64u, pkhex);
+#else
         if (DSO_Atecc608b_GetPubKey64(DSO_ATECC_AUTH_SLOT, pk) == 0) {
             DSO_Atecc608b_HexUpper(pk, 64u, pkhex);
         } else {
             pkhex[0] = '\0';
         }
+#endif
         snprintf(reply, reply_sz,
                  "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
                  "\"cmd\":\"atecc.auth_start\",\"result\":\"ok\",\"error\":\"\","
@@ -324,13 +365,68 @@ static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz)
                  seq, did, sighex, pkhex, (unsigned)DSO_ATECC_AUTH_SLOT, (unsigned)vok);
         return 1;
     }
-    /* atecc.auth_verify（服务器 CA 签名的 License 校验）需 Slot2 预置 CA 公钥
-     * → 属 Stage 2（要改配置区/写数据槽），本阶段只留此占位注释。 */
+    /* atecc.auth_verify：校验服务器 CA 签发的 License。
+     * ATECC 路径需要 Slot2 预置 CA 公钥（要 Lock 才写得了）⇒ 未实现；
+     * DEV 软件后端（Stage 2C）在设备侧用 mbedTLS 直接验签。 */
+    if (strcmp(cmd, "atecc.auth_verify") == 0) {
+#if DSO_AUTH_DEV_SOFTKEY
+        static char tok[400];
+        static DSO_AuthLicense lic;
+        const char *why;
+        int arc;
+
+        if (channel != DSO_SW_CMD_CH_ETH) {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.auth_verify\",\"result\":\"error\","
+                     "\"error\":\"use the TCP channel for auth (serial task stack is too small)\","
+                     "\"data\":{}}", seq);
+            return 1;
+        }
+        if (!json_get_str(line, "token", tok, sizeof(tok)) || tok[0] == '\0') {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.auth_verify\",\"result\":\"error\","
+                     "\"error\":\"need params.token\",\"data\":{}}", seq);
+            return 1;
+        }
+        arc = DSO_AuthSoft_VerifyLicense(tok, &lic);
+        if (arc != DSO_AUTH_OK) {
+            why = (arc == DSO_AUTH_ERR_FORMAT) ? "malformed token"
+                : (arc == DSO_AUTH_ERR_DEVICE) ? "token bound to another device"
+                : (arc == DSO_AUTH_ERR_SIG) ? "signature invalid"
+                : "not initialized";
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.auth_verify\",\"result\":\"error\","
+                     "\"error\":\"license rejected rc=%d (%s)\","
+                     "\"data\":{\"code\":%d}}", seq, arc, why, arc);
+            return 1;
+        }
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"atecc.auth_verify\",\"result\":\"ok\",\"error\":\"\","
+                 "\"data\":{\"lic\":\"%s\",\"user\":\"%s\",\"dev\":\"%s\","
+                 "\"nb\":%lu,\"na\":%lu,\"perm\":%lu}}",
+                 seq, lic.lic, lic.user, lic.dev,
+                 (unsigned long)lic.nb, (unsigned long)lic.na,
+                 (unsigned long)lic.perm);
+#else
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"atecc.auth_verify\",\"result\":\"error\","
+                 "\"error\":\"not implemented: ATECC needs a CA key in Slot2 "
+                 "(requires Lock) - enable DSO_AUTH_DEV_SOFTKEY for the DEV path\","
+                 "\"data\":{}}", seq);
+#endif
+        return 1;
+    }
 
     return 0;   /* 非本模块命令，交给其它处理器 */
 }
 
-int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
+int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz,
+                              uint8_t channel)
 {
     int rc;
 
@@ -341,7 +437,7 @@ int DSO_Switch_Cmd_HandleLine(const char *line, char *reply, size_t reply_sz)
     if (s_cmd_mtx != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
         (void)xSemaphoreTake(s_cmd_mtx, portMAX_DELAY);
     }
-    rc = sw_cmd_handle_locked(line, reply, reply_sz);
+    rc = sw_cmd_handle_locked(line, reply, reply_sz, channel);
     if (s_cmd_mtx != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
         (void)xSemaphoreGive(s_cmd_mtx);
     }
@@ -371,7 +467,8 @@ static void vSwitchSerialTask(void *pvParameters)
                 DebugUartLock();
                 printf("[SER] got %d: %s\r\n", s_serial_line_len, s_serial_line);
                 DebugUartUnlock();
-                if (DSO_Switch_Cmd_HandleLine(s_serial_line, reply, sizeof(s_reply))) {
+                if (DSO_Switch_Cmd_HandleLine(s_serial_line, reply, sizeof(s_reply),
+                                              DSO_SW_CMD_CH_SERIAL)) {
                     /* 串口回 ack（与其它 printf 互斥，防字节交错） */
                     DebugUartLock();
                     printf("%s\r\n", reply);

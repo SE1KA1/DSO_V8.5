@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER, STM32H743xx,ARM_MATH_CM7,DSO_PLOTBUF_GUARD_ENABLE=1,MAINTASK_STACK_LOG_INTERVAL_MS=2000</Define>
               <Undefine></Undefine>
-              <IncludePath>..\..\Libraries\CMSIS\DSP\Include;..\..\Libraries\CMSIS\Include;..\..\Libraries\CMSIS\Device\ST\STM32H7xx\Include;..\..\Libraries\STM32H7xx_HAL_Driver\Inc;..\..\User\bsp\inc;..\..\User;..\..\User\bsp;..\..\FreeRTOS\include;..\..\FreeRTOS\portable\RVDS\ARM_CM7\r0p1;..\..\emWin;..\..\emWin\Config;..\..\emWin\Include;..\..\User\ui;..\..\LWIP\App;..\..\LWIP\Target;..\..\Middlewares\Third_Party\LwIP\src\include;..\..\Middlewares\Third_Party\LwIP\system;..\..\Drivers\BSP\Components\lan8742;..\..\User\dso\fmc16;..\..\Middlewares\Third_Party\FreeRTOS\Source\CMSIS_RTOS</IncludePath>
+              <IncludePath>..\..\Libraries\CMSIS\DSP\Include;..\..\Libraries\CMSIS\Include;..\..\Libraries\CMSIS\Device\ST\STM32H7xx\Include;..\..\Libraries\STM32H7xx_HAL_Driver\Inc;..\..\User\bsp\inc;..\..\User;..\..\User\bsp;..\..\FreeRTOS\include;..\..\FreeRTOS\portable\RVDS\ARM_CM7\r0p1;..\..\emWin;..\..\emWin\Config;..\..\emWin\Include;..\..\User\ui;..\..\LWIP\App;..\..\LWIP\Target;..\..\Middlewares\Third_Party\LwIP\src\include;..\..\Middlewares\Third_Party\LwIP\system;..\..\Drivers\BSP\Components\lan8742;..\..\User\dso\fmc16;..\..\Middlewares\Third_Party\FreeRTOS\Source\CMSIS_RTOS;..\..\Middlewares\Third_Party\mbedtls\include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -738,6 +738,96 @@
               <FileName>dso_watchdog.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\User\dso\dso_watchdog.c</FilePath>
+            </File>
+            <File>
+              <FileName>dso_auth_soft.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_auth_soft.c</FilePath>
+            </File>
+            <File>
+              <FileName>dso_b64.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_b64.c</FilePath>
+            </File>
+            <File>
+              <FileName>dso_devkey.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_devkey.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>mbedTLS</GroupName>
+          <Files>
+            <File>
+              <FileName>bignum.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\bignum.c</FilePath>
+            </File>
+            <File>
+              <FileName>ecp.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\ecp.c</FilePath>
+            </File>
+            <File>
+              <FileName>ecp_curves.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\ecp_curves.c</FilePath>
+            </File>
+            <File>
+              <FileName>ecdsa.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\ecdsa.c</FilePath>
+            </File>
+            <File>
+              <FileName>asn1parse.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\asn1parse.c</FilePath>
+            </File>
+            <File>
+              <FileName>asn1write.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\asn1write.c</FilePath>
+            </File>
+            <File>
+              <FileName>md.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\md.c</FilePath>
+            </File>
+            <File>
+              <FileName>sha256.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\sha256.c</FilePath>
+            </File>
+            <File>
+              <FileName>hmac_drbg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\hmac_drbg.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\platform.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform_util.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\platform_util.c</FilePath>
+            </File>
+            <File>
+              <FileName>memory_buffer_alloc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\memory_buffer_alloc.c</FilePath>
+            </File>
+            <File>
+              <FileName>constant_time.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\constant_time.c</FilePath>
+            </File>
+            <File>
+              <FileName>error.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Middlewares\Third_Party\mbedtls\library\error.c</FilePath>
             </File>
           </Files>
         </Group>

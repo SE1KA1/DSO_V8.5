@@ -20,6 +20,8 @@
 #include "dso_acq.h"
 #include "dso_watchdog.h"
 #include "dso_atecc608b.h"
+#include "dso_config.h"
+#include "dso_auth_soft.h"
 #include "bsp_pcal6524.h"
 #include "fmc16_conf.h"
 #include "lwip/sockets.h"
@@ -225,6 +227,12 @@ static void mup_task(void *pv)
             char did[DSO_DEVICE_ID_LEN + 1u];
             char ser4[9];
             DSO_Atecc608b_Status ast;
+#if DSO_AUTH_DEV_SOFTKEY
+            /* DEV 软件后端在设备侧验过 License 后上报 AUTHORIZED（只上报，不拦截操作） */
+            const char *login = DSO_AuthSoft_LoginState();
+#else
+            const char *login = "LOGGED_OUT";
+#endif
 
             DSO_Atecc608b_GetStatus(&ast);
             (void)DSO_Atecc608b_DeviceId16(did);
@@ -237,17 +245,17 @@ static void mup_task(void *pv)
                          "{\"present\":1,\"comm_ok\":%u,\"device_id\":\"%s\","
                          "\"chip_info\":{\"serial4\":\"%s\",\"part\":\"608B\","
                          "\"rev\":\"%02x%02x%02x%02x\",\"lock_config\":%u,\"lock_data\":%u},"
-                         "\"login_state\":\"LOGGED_OUT\",\"fail_cnt\":%u}",
+                         "\"login_state\":\"%s\",\"fail_cnt\":%u}",
                          (unsigned)ast.comm_ok, did, ser4,
                          (unsigned)ast.rev[0], (unsigned)ast.rev[1],
                          (unsigned)ast.rev[2], (unsigned)ast.rev[3],
                          (unsigned)ast.lock_config, (unsigned)ast.lock_data,
-                         (unsigned)ast.fail_cnt);
+                         login, (unsigned)ast.fail_cnt);
             } else {
                 snprintf(js, sizeof(js),
                          "{\"present\":0,\"comm_ok\":%u,\"device_id\":\"%s\","
-                         "\"login_state\":\"LOGGED_OUT\",\"fail_cnt\":%u}",
-                         (unsigned)ast.comm_ok, did, (unsigned)ast.fail_cnt);
+                         "\"login_state\":\"%s\",\"fail_cnt\":%u}",
+                         (unsigned)ast.comm_ok, did, login, (unsigned)ast.fail_cnt);
             }
             mup_send("atecc608b", "module.data", js);
             /* tamper 事件：连续读失败越过阈值才报（单次抖动不误报） */

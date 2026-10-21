@@ -59,7 +59,8 @@ static char s_reply[DSO_SWITCH_CMD_REPLY_MAX];
     if ((c) == '\n') { \
         char *reply = s_reply; \
         s_cmd_line[s_cmd_line_len] = '\0'; \
-        if (DSO_Switch_Cmd_HandleLine(s_cmd_line, reply, sizeof(s_reply))) { \
+        if (DSO_Switch_Cmd_HandleLine(s_cmd_line, reply, sizeof(s_reply), \
+                                      DSO_SW_CMD_CH_ETH)) { \
             printf("[SWC] %s -> %s\r\n", s_cmd_line, reply); \
             DSO_ETH_Upload_SendLine(reply); \
         } else { \
