@@ -391,6 +391,57 @@ def _cmd_license(args) -> int:
     return 0
 
 
+def _cmd_revoke(args) -> int:
+    _svc, store, _ca = _service()
+    if args.jti:
+        store.revoke_license(args.jti)
+        print("license revoked:", args.jti)
+        return 0
+    n = store.revoke_device(args.device)
+    print("device revoked: %s (%d record(s) marked)" % (args.device, n))
+    print("note: the device keeps its cached license until it expires; the")
+    print("      enforcement is that NO new license will be issued for it.")
+    return 0
+
+
+def _cmd_renew(args) -> int:
+    """Renew a license on a live device: proof -> new license -> push to device."""
+    from .device_client import DeviceClient, DeviceError
+
+    svc, _store, _ca = _service()
+    pwd = args.password or input("password for %s: " % args.user)
+    try:
+        with DeviceClient(args.host, args.port) as client:
+            ack = client.get_devid()
+            if ack.get("result") != "ok":
+                print("get_devid failed:", ack.get("error"))
+                return 2
+            dev = ack["data"]["device_id"]
+            sid = svc.login(args.user, pwd)
+            challenge = svc.issue_challenge(sid, dev)
+            ack = client.auth_start(challenge)
+            if ack.get("result") != "ok":
+                print("auth_start failed:", ack.get("error"))
+                return 3
+            svc.verify_proof(sid, dev, challenge,
+                             ack["data"]["signature_hex"],
+                             ack["data"]["pubkey_hex"],
+                             ack["data"]["self_verify"])
+            token = svc.issue_license(sid, dev, ttl_s=args.ttl)
+            ack = client.auth_verify(token, dev)
+            if ack.get("result") != "ok":
+                print("device rejected the new license:", ack.get("error"))
+                return 4
+            data = ack.get("data", {})
+            print("renewed     : lic=%s user=%s na=%s"
+                  % (data.get("lic"), data.get("user"), data.get("na")))
+            print("device now holds the new license (check with `license`)")
+            return 0
+    except (DeviceError, AuthError) as exc:
+        print("renew refused:", exc)
+        return 5
+
+
 def _cmd_negtest(args) -> int:
     """Prove the *rejection* paths on a live device.
 
@@ -567,6 +618,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--c", action="store_true",
                    help="emit User/dso/dso_auth_ca.h content")
     p.set_defaults(func=_cmd_show_ca)
+
+    p = sub.add_parser("renew",
+                       help="renew a license on a live device (proof -> new license)")
+    p.add_argument("--host", required=True)
+    p.add_argument("--port", type=int, default=5005)
+    p.add_argument("--user", required=True)
+    p.add_argument("--password", default=None)
+    p.add_argument("--ttl", type=int, default=900)
+    p.set_defaults(func=_cmd_renew)
+
+    p = sub.add_parser("revoke", help="revoke a license id or a whole device")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--jti", default=None)
+    g.add_argument("--device", default=None)
+    p.set_defaults(func=_cmd_revoke)
 
     p = sub.add_parser("license",
                        help="read-only: show the license the device holds")

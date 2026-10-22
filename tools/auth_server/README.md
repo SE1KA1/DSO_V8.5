@@ -47,6 +47,13 @@ python -m tools.auth_server.service negtest --host 192.168.100.50 --user stu001
 
 # 10) 只读查询设备当前持有的 License（登录状态 + lic/user/nb/na/perm）
 python -m tools.auth_server.service license --host 192.168.100.50
+
+# 11) 续期：设备证明 -> 新 License -> 推给设备
+python -m tools.auth_server.service renew --host 192.168.100.50 --user stu001
+
+# 12) 吊销：单张 License 或整台设备（之后不再签发）
+python -m tools.auth_server.service revoke --jti <jti>
+python -m tools.auth_server.service revoke --device Eep21025E269FA2E
 ```
 
 > `dso_auth_ca.h` 是**生成文件**：本机 CA 换掉后必须重新生成，否则设备侧会拒绝所有 License。

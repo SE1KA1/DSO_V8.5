@@ -190,6 +190,27 @@ class Store:
         rec["revoked"] = True
         self.save()
 
+    def revoke_device(self, dev: str) -> int:
+        """Revoke every binding and every issued license for one device.
+
+        The device itself cannot learn about this while offline (no clock, no
+        push channel) — enforcement is server-side: no new license will be
+        issued, so the cached one simply expires.
+        @return number of records changed.
+        """
+        n = 0
+        for b in self.data["bindings"]:
+            if b["dev"] == dev and not b["revoked"]:
+                b["revoked"] = True
+                n += 1
+        for rec in self.data["licenses"].values():
+            if rec["dev"] == dev and not rec["revoked"]:
+                rec["revoked"] = True
+                n += 1
+        if n:
+            self.save()
+        return n
+
     def is_revoked(self, jti: str) -> bool:
         rec = self.data["licenses"].get(jti)
         return bool(rec and rec["revoked"])

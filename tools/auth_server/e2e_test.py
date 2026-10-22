@@ -441,6 +441,23 @@ class TestPolicy(Harness):
         with self.assertRaises(AuthError):
             self.svc.verify_license(proto.encode_token(payload, sig))
 
+    def test_revoke_device_blocks_new_licenses(self) -> None:
+        sid = self.prove()
+        changed = self.store.revoke_device(DEV_ID)
+        self.assertGreaterEqual(changed, 1)
+        with self.assertRaises(AuthError):
+            self.svc.issue_license(sid, DEV_ID)
+
+    def test_revoke_invalidates_issued_license(self) -> None:
+        """Server-side: an already-issued token stops verifying after revocation.
+
+        (The DEVICE keeps its cached copy until it expires — it has no clock and
+        no push channel; that limitation is documented in the protocol doc.)"""
+        token = self.license()
+        self.store.revoke_device(DEV_ID)
+        with self.assertRaises(AuthError):
+            self.svc.verify_license(token)
+
     def test_bad_password(self) -> None:
         with self.assertRaises(AuthError):
             self.svc.login(USER, "wrong")
