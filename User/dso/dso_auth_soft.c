@@ -44,6 +44,8 @@ static uint8_t s_res_after_sign = 0u;
 static uint8_t s_res_after_verify = 0u;
 static uint8_t s_boot = 1u;          /* 1 until Init finishes (selftest is not a real call) */
 static char s_login[16] = "NO_LICENSE";
+static DSO_AuthLicense s_cur_lic;    /* last successfully verified license */
+static uint8_t s_has_lic = 0u;       /* 1 = s_cur_lic is valid */
 
 /* Lazy init (first use, on the caller's task). */
 static int authsoft_ensure(void);
@@ -193,6 +195,15 @@ const uint8_t *DSO_AuthSoft_Pubkey(void)
 const char *DSO_AuthSoft_LoginState(void)
 {
     return s_login;
+}
+
+int DSO_AuthSoft_GetLicense(DSO_AuthLicense *out)
+{
+    if (out == NULL || s_has_lic == 0u) {
+        return 0;
+    }
+    *out = s_cur_lic;
+    return 1;
 }
 
 /* ===================================================================== */
@@ -380,6 +391,8 @@ int DSO_AuthSoft_VerifyLicense(const char *token, DSO_AuthLicense *out)
     /* Time is NOT enforced on-device (no RTC/SNTP): `nb`/`na` are reported up
      * and the server stays authoritative. */
     (void)strcpy(s_login, "AUTHORIZED");
+    s_cur_lic = *out;          /* remember it for atecc.get_license / telemetry */
+    s_has_lic = 1u;
     if (s_res_after_verify == 0u) {
         s_res_after_verify = 1u;
         report_resources("after license verify");

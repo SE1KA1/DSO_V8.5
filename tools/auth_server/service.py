@@ -362,6 +362,31 @@ def _cmd_flow(args) -> int:
         return 5
 
 
+def _cmd_license(args) -> int:
+    """Read-only: ask the device which license it currently holds."""
+    from .device_client import DeviceClient, DeviceError
+
+    try:
+        with DeviceClient(args.host, args.port) as client:
+            ack = client.get_license()
+    except DeviceError as exc:
+        print("device error:", exc)
+        return 5
+    if ack.get("result") != "ok":
+        print("query failed:", ack.get("error"))
+        return 2
+    data = ack.get("data", {})
+    print("device_id   :", data.get("device_id"))
+    print("login_state :", data.get("login_state"))
+    lic = data.get("license")
+    if not lic:
+        print("license     : (none held since boot)")
+        return 0
+    for key in ("lic", "user", "dev", "nb", "na", "perm"):
+        print("%-12s %s" % (key + ":", lic.get(key)))
+    return 0
+
+
 def _cmd_negtest(args) -> int:
     """Prove the *rejection* paths on a live device.
 
@@ -538,6 +563,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--c", action="store_true",
                    help="emit User/dso/dso_auth_ca.h content")
     p.set_defaults(func=_cmd_show_ca)
+
+    p = sub.add_parser("license",
+                       help="read-only: show the license the device holds")
+    p.add_argument("--host", required=True)
+    p.add_argument("--port", type=int, default=5005)
+    p.set_defaults(func=_cmd_license)
 
     p = sub.add_parser("negtest",
                        help="prove the REJECTION paths on a live device")

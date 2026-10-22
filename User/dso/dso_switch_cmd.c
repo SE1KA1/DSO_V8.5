@@ -422,6 +422,43 @@ static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz,
         return 1;
     }
 
+    /* atecc.get_license：只读查询设备当前持有的 License（不重新校验、不写任何东西） */
+    if (strcmp(cmd, "atecc.get_license") == 0) {
+        char did[DSO_DEVICE_ID_LEN + 1u];
+        (void)DSO_Atecc608b_DeviceId16(did);
+#if DSO_AUTH_DEV_SOFTKEY
+        {
+            static DSO_AuthLicense lic;
+            if (DSO_AuthSoft_GetLicense(&lic) != 0) {
+                snprintf(reply, reply_sz,
+                         "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                         "\"cmd\":\"atecc.get_license\",\"result\":\"ok\",\"error\":\"\","
+                         "\"data\":{\"device_id\":\"%s\",\"login_state\":\"%s\","
+                         "\"license\":{\"lic\":\"%s\",\"user\":\"%s\",\"dev\":\"%s\","
+                         "\"nb\":%lu,\"na\":%lu,\"perm\":%lu}}}",
+                         seq, did, DSO_AuthSoft_LoginState(),
+                         lic.lic, lic.user, lic.dev,
+                         (unsigned long)lic.nb, (unsigned long)lic.na,
+                         (unsigned long)lic.perm);
+            } else {
+                snprintf(reply, reply_sz,
+                         "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                         "\"cmd\":\"atecc.get_license\",\"result\":\"ok\",\"error\":\"\","
+                         "\"data\":{\"device_id\":\"%s\",\"login_state\":\"%s\","
+                         "\"license\":null}}",
+                         seq, did, DSO_AuthSoft_LoginState());
+            }
+        }
+#else
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"atecc.get_license\",\"result\":\"ok\",\"error\":\"\","
+                 "\"data\":{\"device_id\":\"%s\",\"login_state\":\"LOGGED_OUT\","
+                 "\"license\":null}}", seq, did);
+#endif
+        return 1;
+    }
+
     return 0;   /* 非本模块命令，交给其它处理器 */
 }
 

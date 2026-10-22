@@ -26,6 +26,7 @@ class AteccSimulator:
         self.provisioned = provisioned
         self.ca_pub_hex = ca_pub_hex
         self._key = None
+        self._license: dict | None = None      # last accepted license
         if provisioned:
             self._key = self._generate_key()
 
@@ -80,6 +81,12 @@ class AteccSimulator:
             }
         if cmd == "atecc.auth_verify":
             return self._auth_verify(params or {})
+        if cmd == "atecc.get_license":
+            return "ok", "", {
+                "device_id": self.device_id,
+                "login_state": ("AUTHORIZED" if self._license else "NO_LICENSE"),
+                "license": self._license,
+            }
         return "error", "unknown cmd %s" % cmd, None
 
     def _auth_verify(self, params: dict) -> tuple[str, str, dict | None]:
@@ -110,6 +117,7 @@ class AteccSimulator:
         if not verify_digest(ca_pub, digest, sig, require_low_s=True):
             return ("error", "license rejected rc=-4 (signature invalid)",
                     {"code": -4})
-        return "ok", "", {"lic": fields["lic"], "user": fields["user"],
-                          "dev": fields["dev"], "na": fields["na"],
-                          "perm": fields["perm"]}
+        self._license = {"lic": fields["lic"], "user": fields["user"],
+                         "dev": fields["dev"], "nb": fields["nb"],
+                         "na": fields["na"], "perm": fields["perm"]}
+        return "ok", "", dict(self._license)

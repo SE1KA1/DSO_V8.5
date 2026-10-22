@@ -143,3 +143,6 @@ class DeviceClient:
         if device_id:
             params["device_id"] = device_id
         return self.send_cmd("atecc.auth_verify", params)
+
+    def get_license(self) -> dict:
+        return self.send_cmd("atecc.get_license")

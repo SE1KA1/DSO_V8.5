@@ -56,4 +56,8 @@ const uint8_t *DSO_AuthSoft_Pubkey(void);
 /** Reported license state: "NO_LICENSE" / "AUTHORIZED". */
 const char *DSO_AuthSoft_LoginState(void);
 
+/** Copy the last successfully verified license into `out`.
+ *  @return 1 = a license is held; 0 = none (never verified since boot). */
+int DSO_AuthSoft_GetLicense(DSO_AuthLicense *out);
+
 #endif /* DSO_AUTH_SOFT_H */
