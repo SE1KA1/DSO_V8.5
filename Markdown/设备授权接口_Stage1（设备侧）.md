@@ -140,7 +140,7 @@ except InvalidSignature:
 | **Stage 1** | DeviceID 派生上报；片内挑战签名自测（Nonce/Sign/Verify）；SlotConfig 只读解读；遥测帧；3 条命令 | **本轮已实现** |
 | **Stage 2A** | **协议 v0 + PC 侧授权服务 + 模拟设备闭环**（挑战/证明/License 签发与校验/能力协商），见 `Markdown/设备授权协议_v0.md`、`tools/auth_server/` | **2026-10-21 完成**（零硬件风险） |
 | **Stage 2B** | 设备侧预置：改配置区 → `Lock(Config)` → 写 Slot0（GenKey）/ CA 公钥到 **slot 8–15** → `atecc.auth_verify` | **阻塞**：2026-10-20 实测确认不 Lock 数据区不可访问；需用户明确批准不可逆操作 |
-| **Stage 2C** | 备选：设备侧软件密钥过渡（micro-ecc/mbedTLS），把整链在真机跑通、芯片不参与 | 未做 |
+| **Stage 2C** | 设备侧软件密钥过渡（mbedTLS P-256），把整链在真机跑通、芯片不参与 | **2026-10-22 真机验证通过**：正向闭环、负向 7/7、续期/吊销、状态查询 |
 | **Stage 3（量产，不可逆）** | `Lock(Config)`、`Lock(Data+OTP)`、OTP 写入、ROP/PCROP、关闭 SWD、HSM 侧 CA 私钥 | 需 HSM/CA 配合 + 逐项单独批准 |
 
 **已知依赖/缺口（需要其它侧配合）**
