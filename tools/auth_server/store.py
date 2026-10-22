@@ -35,13 +35,36 @@ def _default_state() -> dict:
 class Store:
     def __init__(self, path: str | os.PathLike):
         self.path = Path(path)
+        self._mtime = 0
         if self.path.exists():
             self.data = json.loads(self.path.read_text(encoding="utf-8"))
             if self.data.get("version") != SCHEMA_VERSION:
                 raise RuntimeError("unsupported store version")
+            self._mtime = self.path.stat().st_mtime_ns
         else:
             self.data = _default_state()
             self.save()
+
+    def refresh(self) -> None:
+        """Reload if another process (e.g. the CLI) rewrote the file.
+
+        The HTTP service keeps a Store in memory while administrators may use
+        the CLI to enroll devices. Without this, a change made by the CLI is
+        invisible to the running service until it restarts.
+        """
+        try:
+            mtime = self.path.stat().st_mtime_ns
+        except OSError:
+            return
+        if mtime == self._mtime:
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if data.get("version") == SCHEMA_VERSION:
+            self.data = data
+            self._mtime = mtime
 
     # ---- persistence -----------------------------------------------------
     def save(self) -> None:
@@ -61,6 +84,7 @@ class Store:
         for attempt in range(8):
             try:
                 os.replace(tmp, self.path)
+                self._mark_saved()
                 return
             except OSError as exc:          # WinError 5 / 32: transient lock
                 last = exc
@@ -73,10 +97,17 @@ class Store:
                 os.unlink(tmp)
             except OSError:
                 pass
+            self._mark_saved()
             return
         except OSError:
             pass
         raise last if last is not None else RuntimeError("cannot save store")
+
+    def _mark_saved(self) -> None:
+        try:
+            self._mtime = self.path.stat().st_mtime_ns
+        except OSError:
+            self._mtime = 0
 
     def next_seq(self) -> int:
         self.data["seq"] += 1

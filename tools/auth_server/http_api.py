@@ -153,6 +153,10 @@ class AuthHandler(BaseHTTPRequestHandler):
                 raise ApiError(503, "busy", "server busy")
             try:
                 self._check_host()
+                if path != "/api/health":
+                    # Pick up changes made by the CLI while we are running.
+                    with self.ctx.svc_lock:
+                        self.ctx.store.refresh()
                 self._route(method)
             finally:
                 self.ctx.sem.release()

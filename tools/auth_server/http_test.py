@@ -246,6 +246,24 @@ class TestBasics(Base):
                                b"Connection: close\r\n\r\n")
         self.assertEqual(status, 421)
 
+    def test_picks_up_external_store_change(self) -> None:
+        """A CLI `add-user` while the service runs must be visible immediately."""
+        other = Store(self.state / "store.json")
+        other.add_user("stu003", "third password")
+        status, body, _ = self.post("/api/session",
+                                    {"user": "stu003", "password": "third password"})
+        self.assertEqual(status, 200, body)
+
+    def test_device_without_address(self) -> None:
+        other = Store(self.state / "store.json")
+        rec = other.get_device(DEV_ID)
+        rec.pop("host", None)
+        other.save()
+        sid = self.login()
+        status, body, _ = self.post("/api/authorize", {"sid": sid, "device": DEV_ID})
+        self.assertEqual(status, 409)
+        self.assertEqual(body["code"], "device_no_address")
+
 
 # ---------------------------------------------------------------------------
 # Authorization
