@@ -36,11 +36,17 @@
 static unsigned char s_arena[4096];
 
 static mbedtls_ecp_group s_grp;
-static int s_inited = 0;
+/* 0 = not initialized yet, 1 = ready, 2 = init failed, 3 = initializing.
+ * Initialization is LAZY (first sign/verify, on the caller's task): mbedTLS
+ * needs ~4 KB of stack while the boot stack is only 4 KB in total. */
+static volatile uint8_t s_init_state = 0u;
 static uint8_t s_res_after_sign = 0u;
 static uint8_t s_res_after_verify = 0u;
 static uint8_t s_boot = 1u;          /* 1 until Init finishes (selftest is not a real call) */
 static char s_login[16] = "NO_LICENSE";
+
+/* Lazy init (first use, on the caller's task). */
+static int authsoft_ensure(void);
 
 /* Known-answer vector (generated on the PC with the same public test key).
  * Kept independent of the CA so this check survives CA rotation. */
@@ -76,6 +82,12 @@ static void report_resources(const char *tag)
     size_t cur_used = 0u;
     size_t cur_blocks = 0u;
 
+    /* uxTaskGetStackHighWaterMark(NULL) dereferences pxCurrentTCB, which is not
+     * valid before the scheduler runs. Never let this be called pre-scheduler. */
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+        return;
+    }
+
     mbedtls_memory_buffer_alloc_max_get(&max_used, &max_blocks);
     mbedtls_memory_buffer_alloc_cur_get(&cur_used, &cur_blocks);
 
@@ -103,7 +115,10 @@ int DSO_AuthSoft_VerifyDigest(const uint8_t pub[64], const uint8_t digest[32],
     unsigned char enc[65];
     int rc = DSO_AUTH_ERR_SIG;
 
-    if (pub == NULL || digest == NULL || sig == NULL || s_inited == 0) {
+    if (pub == NULL || digest == NULL || sig == NULL) {
+        return DSO_AUTH_ERR_PARAM;
+    }
+    if (authsoft_ensure() != DSO_AUTH_OK) {
         return DSO_AUTH_ERR_INIT;
     }
 
@@ -138,7 +153,10 @@ int DSO_AuthSoft_SignDigest(const uint8_t digest[32], uint8_t sig[64])
     mbedtls_mpi priv;
     int rc = DSO_AUTH_ERR_SIG;
 
-    if (digest == NULL || sig == NULL || s_inited == 0) {
+    if (digest == NULL || sig == NULL) {
+        return DSO_AUTH_ERR_PARAM;
+    }
+    if (authsoft_ensure() != DSO_AUTH_OK) {
         return DSO_AUTH_ERR_INIT;
     }
 
@@ -321,8 +339,11 @@ int DSO_AuthSoft_VerifyLicense(const char *token, DSO_AuthLicense *out)
     uint8_t digest[32];
     char did[17];
 
-    if (token == NULL || out == NULL || s_inited == 0) {
+    if (token == NULL || out == NULL) {
         return DSO_AUTH_ERR_PARAM;
+    }
+    if (authsoft_ensure() != DSO_AUTH_OK) {
+        return DSO_AUTH_ERR_INIT;
     }
     dot = strchr(token, '.');
     if (dot == NULL || strchr(dot + 1, '.') != NULL) {
@@ -387,13 +408,37 @@ static int selftest(void)
     return DSO_AUTH_ERR_INIT;
 }
 
-int DSO_AuthSoft_Init(void)
+/* Real initialization — runs in a task, NEVER on the boot stack.
+ * (ESC: the previous version ran this from main(); mbedTLS sign+verify needs
+ * ~4 KB while the MSP is 4 KB total, and it also touched FreeRTOS task APIs
+ * before the scheduler started.) */
+static int authsoft_do_init(void);   /* forward */
+
+/**
+ * Initialize on first use. The callers are command handlers, which run on the
+ * ETH_Up task (10 KB stack) — the only place with enough stack for mbedTLS.
+ * Never call this from main() or from an ISR.
+ * @return DSO_AUTH_OK when ready.
+ */
+static int authsoft_ensure(void)
+{
+    if (s_init_state == 1u) {
+        return DSO_AUTH_OK;
+    }
+    if (s_init_state == 2u || s_init_state == 3u) {
+        return DSO_AUTH_ERR_INIT;      /* failed, or init already in progress */
+    }
+    s_init_state = 3u;                 /* in progress (re-entrancy guard) */
+    if (authsoft_do_init() != DSO_AUTH_OK) {
+        s_init_state = 2u;
+        return DSO_AUTH_ERR_INIT;
+    }
+    return DSO_AUTH_OK;
+}
+
+static int authsoft_do_init(void)
 {
     int rc;
-
-    if (s_inited != 0) {
-        return DSO_AUTH_OK;      /* re-init would reset the arena under live state */
-    }
 
     /* The arena installs the mbedtls_calloc/free hooks itself; it MUST run
      * before any other mbedTLS call. */
@@ -407,7 +452,7 @@ int DSO_AuthSoft_Init(void)
         DebugUartUnlock();
         return DSO_AUTH_ERR_INIT;
     }
-    s_inited = 1;
+    s_init_state = 1u;
 
     DebugUartLock();
     printf("[AUTH-SW] *** DEV SOFTWARE KEY ENABLED (public test key 00..1F) ***\r\n");
@@ -424,3 +469,9 @@ int DSO_AuthSoft_Init(void)
     s_boot = 0u;
     return rc;
 }
+
+/* No boot-time init and no dedicated task on purpose:
+ *   - the boot stack is only 4 KB and mbedTLS needs ~4 KB;
+ *   - the FreeRTOS heap is already near its limit, so an 8 KB init task is a
+ *     bad trade;
+ *   - this runs on the ETH_Up task (10 KB) on first use instead. */

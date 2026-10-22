@@ -36,9 +36,9 @@ typedef struct {
 #define DSO_AUTH_ERR_SIG     (-4)   /* signature does not verify */
 #define DSO_AUTH_ERR_PARAM   (-5)
 
-/** Initialize the arena, load the P-256 group and run the self-test.
- *  @return 0 on success; <0 if mbedTLS init or the self-test failed. */
-int DSO_AuthSoft_Init(void);
+/* 初始化是**惰性**的：第一次调用签名/验签时，在调用者所在任务里完成
+ * （命令路径 = ETH_Up 任务，10 KB 栈）。不要在 main() 里初始化 ——
+ * 启动栈只有 4 KB，mbedTLS 放不下。 */
 
 /** Sign a 32-byte digest with the DEV key (RFC6979). */
 int DSO_AuthSoft_SignDigest(const uint8_t digest[32], uint8_t sig[64]);

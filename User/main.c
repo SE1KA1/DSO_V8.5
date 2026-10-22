@@ -23,7 +23,6 @@
 #include "dso/dso_ina226.h"
 #include "dso/dso_ina226_u44.h"
 #include "dso/dso_atecc608b.h"
-#include "dso/dso_auth_soft.h"
 #include "dso/dso_module_upload.h"
 #include "dso/dso_watchdog.h"
 #include "dso/dso_fmc_telemetry.h"
@@ -522,12 +521,6 @@ int main(void)
 
     /* 密码芯片 ATECC608B：一次性上电探测（识别/序列号/锁状态打印） */
     DSO_Atecc608b_Init();
-
-#if DSO_AUTH_DEV_SOFTKEY
-    /* Stage 2C（**DEV ONLY**）：软件 P-256 后端。必须在命令任务开始处理之前初始化，
-     * 因为它安装 mbedTLS 的固定 arena 并预加载 P-256 曲线。不接触 ATECC。 */
-    (void)DSO_AuthSoft_Init();
-#endif
 
 #if DSO_ATECC_PROVISION_ONESHOT
     /* Stage 2 最小步骤（**开发用**，默认关闭）：一次性预置 Slot0 —— 见 dso_atecc608b.h 说明。
