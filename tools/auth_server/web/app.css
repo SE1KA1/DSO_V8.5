@@ -1,0 +1,122 @@
+/* DSO 授权服务 —— 深色主题（调色板取自 pc_switch_panel/widgets.py） */
+:root {
+  --bg: #0d1117;
+  --card: #181c26;
+  --border: #2a303e;
+  --divider: #3a4150;
+  --text: #e8ecf4;
+  --dim: #8b94a6;
+  --green: #3fc65b;
+  --yellow: #ffb300;
+  --red: #ff503a;
+  --blue: #44aaff;
+  --cyan: #26c6da;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.55 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+header .sub { color: var(--dim); font-size: 12px; }
+header nav { margin-left: auto; display: flex; gap: 14px; }
+header nav a { color: var(--dim); text-decoration: none; font-size: 13px; }
+header nav a:hover, header nav a.active { color: var(--blue); }
+
+main {
+  max-width: 980px;
+  margin: 26px auto 60px;
+  padding: 0 20px;
+  display: grid;
+  gap: 18px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+.card h2 {
+  margin: 0 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: .3px;
+}
+.card h2 .hint { color: var(--dim); font-weight: 400; margin-left: 8px; font-size: 12px; }
+
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.row + .row { margin-top: 10px; }
+label { color: var(--dim); font-size: 12px; min-width: 74px; }
+
+input, select {
+  background: #0f131b;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 10px;
+  font: inherit;
+  min-width: 180px;
+}
+input:focus, select:focus { outline: 1px solid var(--blue); border-color: var(--blue); }
+
+button {
+  background: #202634;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: #1d3a55; border-color: #2f5f8d; }
+button.primary:hover:not(:disabled) { color: #fff; background: #24496b; }
+button.danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+
+.msg { min-height: 20px; font-size: 13px; }
+.msg.ok { color: var(--green); }
+.msg.err { color: var(--red); }
+.msg.info { color: var(--dim); }
+
+.badge {
+  display: inline-block;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--divider);
+  color: var(--dim);
+}
+.badge.on { color: var(--green); border-color: #2d6b3d; background: #14251a; }
+.badge.warn { color: var(--yellow); border-color: #6b5220; background: #241f12; }
+.badge.off { color: var(--red); border-color: #6b2b22; background: #251512; }
+
+dl.kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; margin: 0; }
+dl.kv dt { color: var(--dim); }
+dl.kv dd { margin: 0; font-family: Consolas, monospace; word-break: break-all; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--divider); }
+th { color: var(--dim); font-weight: 500; font-size: 12px; }
+td.mono { font-family: Consolas, monospace; }
+tbody tr:hover { background: #1d2330; }
+
+.hide { display: none !important; }
+.muted { color: var(--dim); }
+.spacer { flex: 1; }
+small.note { color: var(--dim); display: block; margin-top: 8px; }

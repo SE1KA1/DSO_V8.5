@@ -384,6 +384,60 @@ class TestHealthDuringDeviceWork(Base):
 
 
 # ---------------------------------------------------------------------------
+# Static UI + device list + Origin policy
+# ---------------------------------------------------------------------------
+
+class TestStatic(Base):
+    def test_index_and_admin_pages(self) -> None:
+        for path in ("/", "/admin"):
+            status, body, headers = self.get(path)
+            self.assertEqual(status, 200, path)
+            self.assertIn("text/html; charset=utf-8", headers.get("Content-Type", ""))
+            self.assertIn("<title>", body.get("_raw", ""))
+            self.assertTrue(headers.get("Content-Security-Policy"))
+
+    def test_assets(self) -> None:
+        status, _, headers = self.get("/static/app.css")
+        self.assertEqual(status, 200)
+        self.assertIn("text/css", headers.get("Content-Type", ""))
+        status, _, headers = self.get("/static/app.js")
+        self.assertEqual(status, 200)
+        self.assertIn("javascript", headers.get("Content-Type", ""))
+
+    def test_traversal_is_refused(self) -> None:
+        for path in ("/static/../http_api.py",
+                     "/static/%2e%2e/http_api.py",
+                     "/static/.state/store.json"):
+            status, body, _ = self.get(path)
+            self.assertIn(status, (400, 404), path)
+            raw = body.get("_raw", "")
+            self.assertNotIn("def main", raw)
+            self.assertNotIn("users", raw)
+
+    def test_origin_same_origin_allowed(self) -> None:
+        status, _, _ = self.get("/api/health",
+                                {"Origin": "http://127.0.0.1:%d" % self.port})
+        self.assertEqual(status, 200)
+
+    def test_origin_foreign_refused(self) -> None:
+        status, body, _ = self.get("/api/health",
+                                   {"Origin": "http://evil.example"})
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("code"), "cross_origin")
+
+    def test_device_list_requires_auth_and_hides_details(self) -> None:
+        status, _, _ = self.get("/api/devices")
+        self.assertEqual(status, 401)
+        sid = self.login()
+        status, body, _ = self.get("/api/devices", {"X-Session": sid})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["devices"][0]["device"], DEV_ID)
+        text = json.dumps(body)
+        self.assertNotIn("pubkey", text)
+        self.assertNotIn("host", text)
+
+
+# ---------------------------------------------------------------------------
 # Admin + audit
 # ---------------------------------------------------------------------------
 

@@ -36,6 +36,17 @@ from .store import Store
 
 VERSION = "0.2"
 STATE_DIR = Path(__file__).resolve().parent / ".state"
+WEB_DIR = Path(__file__).resolve().parent / "web"
+
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+       "connect-src 'self'; img-src 'self' data:")
+STATIC_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+}
 
 MAX_BODY = 8192
 MAX_CONCURRENT = 16
@@ -153,7 +164,7 @@ class AuthHandler(BaseHTTPRequestHandler):
                 raise ApiError(503, "busy", "server busy")
             try:
                 self._check_host()
-                if path != "/api/health":
+                if path.startswith("/api/") and path != "/api/health":
                     # Pick up changes made by the CLI while we are running.
                     with self.ctx.svc_lock:
                         self.ctx.store.refresh()
@@ -180,9 +191,17 @@ class AuthHandler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").split(":")[0].strip("[]").lower()
         if host and host not in LOOPBACK:
             raise ApiError(421, "bad_host", "unexpected Host header")
-        if self.headers.get("Origin"):
-            raise ApiError(403, "cross_origin",
-                           "cross-origin requests are not allowed")
+        origin = self.headers.get("Origin")
+        if origin:
+            # Browsers attach Origin to same-origin POSTs too, so the UI needs
+            # an allowlist rather than an outright rejection.
+            port = self.server.server_address[1]
+            allowed = {"http://127.0.0.1:%d" % port,
+                       "http://localhost:%d" % port,
+                       "http://[::1]:%d" % port}
+            if origin not in allowed:
+                raise ApiError(403, "cross_origin",
+                               "cross-origin requests are not allowed")
 
     def _json_body(self) -> dict:
         if self.headers.get("Transfer-Encoding"):
@@ -276,11 +295,18 @@ class AuthHandler(BaseHTTPRequestHandler):
             self._need(method, "GET")
             self._get_admin_audit()
             return
+        if path == "/api/devices":
+            self._need(method, "GET")
+            self._get_devices()
+            return
 
         m = re.fullmatch(r"/api/device/([^/]+)/license", path)
         if m:
             self._need(method, "GET")
             self._get_device_license(m.group(1))
+            return
+
+        if self._serve_static(path):
             return
         raise ApiError(404, "not_found", "no such endpoint")
 
@@ -547,7 +573,65 @@ class AuthHandler(BaseHTTPRequestHandler):
             raise ApiError(400, "bad_limit", "limit must be 0..500")
         self._send_json(200, {"ok": True, "events": self.ctx.audit.tail(limit)})
 
+    # ---- device list for the student page --------------------------------
+    def _get_devices(self) -> None:
+        """Public-to-logged-in-users list: device IDs and capability only.
+
+        Deliberately omits pubkey/host/port — the student page only needs to
+        pick a device, and the command endpoint is nobody's business.
+        """
+        self._require_session_or_admin()
+        with self.ctx.svc_lock:
+            devices = self.ctx.store.list_devices()
+        out = [{"device": dev, "capability": rec.get("capability")}
+               for dev, rec in sorted(devices.items())]
+        self._send_json(200, {"ok": True, "devices": out})
+
+    # ---- static UI -------------------------------------------------------
+    def _serve_static(self, path: str) -> bool:
+        if path == "/":
+            name = "index.html"
+        elif path == "/admin":
+            name = "admin.html"
+        elif path.startswith("/static/"):
+            name = path[len("/static/"):]
+        else:
+            return False
+        if (not name or "/" in name or "\\" in name or name.startswith(".")
+                or "\x00" in name or ".." in name):
+            raise ApiError(404, "not_found", "no such file")
+        target = WEB_DIR / name
+        try:
+            if not target.is_file():
+                raise ApiError(404, "not_found", "no such file")
+            body = target.read_bytes()
+        except OSError:
+            raise ApiError(404, "not_found", "no such file") from None
+        ctype = STATIC_TYPES.get(Path(name).suffix.lower(),
+                                 "application/octet-stream")
+        self._send_bytes(200, body, ctype)
+        return True
+
     # ---- response --------------------------------------------------------
+    def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+        if getattr(self, "_sent", False):
+            return
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            self._sent = True
+            self.close_connection = True
+
     def _send_json(self, status: int, obj: dict) -> None:
         if getattr(self, "_sent", False):
             return

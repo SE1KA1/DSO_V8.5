@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DSO 实验设备授权 · 学生端</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>DSO 实验设备授权</h1>
+    <span class="sub">学生端</span>
+    <nav>
+      <a class="active" href="/">学生端</a>
+      <a href="/admin">管理端</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="card" id="loginCard">
+      <h2>登录 <span class="hint">账号由管理员创建</span></h2>
+      <form id="loginForm">
+        <div class="row">
+          <label for="user">账号</label>
+          <input id="user" autocomplete="username" required>
+        </div>
+        <div class="row">
+          <label for="password">密码</label>
+          <input id="password" type="password" autocomplete="current-password" required>
+        </div>
+        <div class="row">
+          <span class="spacer"></span>
+          <button class="primary" id="loginBtn" type="submit">登录</button>
+        </div>
+        <div class="msg" id="loginMsg"></div>
+      </form>
+    </section>
+
+    <section class="card hide" id="authCard">
+      <h2>授权 <span class="hint">由服务端驱动设备完成挑战签名</span></h2>
+      <div class="row">
+        <label for="device">设备</label>
+        <select id="device"></select>
+        <button id="refreshBtn" type="button">刷新列表</button>
+      </div>
+      <div class="row">
+        <button class="primary" id="authorizeBtn" type="button">授权</button>
+        <button id="renewBtn" type="button">续期</button>
+        <button id="statusBtn" type="button">查看设备状态</button>
+        <span class="spacer"></span>
+        <button id="logoutBtn" type="button" class="danger">退出登录</button>
+      </div>
+      <div class="msg" id="authMsg"></div>
+      <small class="note">首次授权约 3–4 秒：设备要完成一次密码学初始化，之后每次约 1–2 秒。</small>
+    </section>
+
+    <section class="card hide" id="resultCard">
+      <h2>本次授权</h2>
+      <dl class="kv" id="resultKv"></dl>
+    </section>
+
+    <section class="card hide" id="deviceCard">
+      <h2>设备当前持有的 License</h2>
+      <div class="row"><span id="deviceState"></span></div>
+      <dl class="kv" id="deviceKv"></dl>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+  <script src="/static/student.js"></script>
+</body>
+</html>

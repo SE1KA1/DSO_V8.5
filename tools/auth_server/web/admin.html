@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DSO 实验设备授权 · 管理端</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>DSO 实验设备授权</h1>
+    <span class="sub">管理端</span>
+    <nav>
+      <a href="/">学生端</a>
+      <a class="active" href="/admin">管理端</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>管理员令牌 <span class="hint">保存在本标签页 sessionStorage</span></h2>
+      <div class="row">
+        <label for="token">令牌</label>
+        <input id="token" type="password" placeholder="tools/auth_server/.state/admin_token">
+        <button class="primary" id="saveToken" type="button">保存</button>
+      </div>
+      <div class="msg" id="tokenMsg"></div>
+    </section>
+
+    <section class="card">
+      <h2>设备台账 <span class="hint">含命令地址与绑定数</span></h2>
+      <div class="row">
+        <button id="loadDevices" type="button">刷新</button>
+      </div>
+      <div class="msg" id="devicesMsg"></div>
+      <table>
+        <thead>
+          <tr><th>设备</th><th>能力</th><th>命令地址</th><th>绑定数</th></tr>
+        </thead>
+        <tbody id="devicesBody"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>新增用户 <span class="hint">密码至少 8 位</span></h2>
+      <div class="row">
+        <label for="newUser">账号</label><input id="newUser">
+        <label for="newPass">密码</label><input id="newPass" type="password">
+        <button id="addUser" type="button">创建</button>
+      </div>
+      <div class="msg" id="userMsg"></div>
+    </section>
+
+    <section class="card">
+      <h2>登记设备 <span class="hint">host/port 是设备 TCP 5005 地址</span></h2>
+      <div class="row">
+        <label for="devId">设备号</label><input id="devId" placeholder="Eep21025E269FA2E">
+      </div>
+      <div class="row">
+        <label for="devPub">公钥</label><input id="devPub" placeholder="128 hex">
+      </div>
+      <div class="row">
+        <label for="devHost">地址</label><input id="devHost" placeholder="192.168.100.50">
+        <label for="devPort">端口</label><input id="devPort" value="5005" size="6">
+        <label for="devCap">能力</label>
+        <select id="devCap">
+          <option value="provisioned">provisioned</option>
+          <option value="identity_only">identity_only</option>
+        </select>
+        <button id="addDevice" type="button">登记</button>
+      </div>
+      <div class="msg" id="deviceMsg"></div>
+    </section>
+
+    <section class="card">
+      <h2>绑定 <span class="hint">允许某学生使用某设备若干天</span></h2>
+      <div class="row">
+        <label for="bindUser">账号</label><input id="bindUser">
+        <label for="bindDev">设备</label><input id="bindDev">
+        <label for="bindDays">天数</label><input id="bindDays" value="30" size="6">
+        <button id="addBind" type="button">绑定</button>
+      </div>
+      <div class="msg" id="bindMsg"></div>
+    </section>
+
+    <section class="card">
+      <h2>吊销 <span class="hint">二选一：单张 License 或整台设备</span></h2>
+      <div class="row">
+        <label for="revokeJti">jti</label><input id="revokeJti" placeholder="License 号">
+        <button id="revokeJtiBtn" type="button" class="danger">吊销 License</button>
+      </div>
+      <div class="row">
+        <label for="revokeDev">设备</label><input id="revokeDev">
+        <button id="revokeDevBtn" type="button" class="danger">吊销设备</button>
+      </div>
+      <div class="msg" id="revokeMsg"></div>
+      <small class="note">吊销的强制力在服务器：不再续签。设备手里的旧 License 到期即失效。</small>
+    </section>
+
+    <section class="card">
+      <h2>审计 <span class="hint">最近 100 条</span></h2>
+      <div class="row">
+        <button id="loadAudit" type="button">刷新</button>
+        <label><input id="autoAudit" type="checkbox" checked style="min-width:auto" size="1"> 每 10 秒自动刷新</label>
+      </div>
+      <div class="msg" id="auditMsg"></div>
+      <table>
+        <thead>
+          <tr><th>时间</th><th>事件</th><th>用户</th><th>设备</th><th>License</th><th>来源</th></tr>
+        </thead>
+        <tbody id="auditBody"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+  <script src="/static/admin.js"></script>
+</body>
+</html>
