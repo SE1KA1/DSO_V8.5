@@ -22,8 +22,9 @@ python -m tools.auth_server.service init
 # 2) 建一个学生账号
 python -m tools.auth_server.service add-user stu001
 
-# 3) 登记设备公钥（只能带外/管理员做，服务不提供在线注册）
-python -m tools.auth_server.service register Eep21025E269FA2E <128位hex公钥>
+# 3) 登记设备公钥 + 命令地址（只能带外/管理员做，服务不提供在线注册）
+#    --host 是设备 TCP 5005 的地址；HTTP API 的 /api/authorize 靠它去驱动设备
+python -m tools.auth_server.service register Eep21025E269FA2E <128位hex公钥> --host 192.168.100.50
 
 # 4) 绑定：允许 stu001 使用该设备 30 天
 python -m tools.auth_server.service bind stu001 Eep21025E269FA2E --days 30

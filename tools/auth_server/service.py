@@ -300,8 +300,11 @@ def _cmd_add_user(args) -> int:
 
 def _cmd_register(args) -> int:
     _svc, store, _ca = _service()
-    store.register_device(args.device, args.pubkey, args.kid, args.capability)
+    store.register_device(args.device, args.pubkey, args.kid, args.capability,
+                          host=args.host, port=args.port)
     print("device registered:", args.device, args.capability)
+    if args.host:
+        print("  command endpoint: %s:%d" % (args.host, args.port))
     return 0
 
 
@@ -606,6 +609,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--kid", default="k1")
     p.add_argument("--capability", default="provisioned",
                    choices=["provisioned", "identity_only"])
+    p.add_argument("--host", default=None,
+                   help="device command endpoint IP (required by the HTTP API)")
+    p.add_argument("--port", type=int, default=5005)
     p.set_defaults(func=_cmd_register)
 
     p = sub.add_parser("bind", help="bind a user to a device")
