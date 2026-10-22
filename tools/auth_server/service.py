@@ -359,6 +359,10 @@ def _cmd_flow(args) -> int:
             return 0
     except (DeviceError, AuthError) as exc:
         print("flow stopped:", exc)
+        if "no reply" in str(exc):
+            print("  note: the FIRST atecc.auth_start also runs the one-time mbedTLS")
+            print("        init + self-test on the device. Check the device serial log")
+            print("        for '[AUTH-SW] ... took N ms' lines to see the real cost.")
         return 5
 
 

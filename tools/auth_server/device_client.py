@@ -30,7 +30,10 @@ class DeviceTimeout(DeviceError):
 
 class DeviceClient:
     def __init__(self, host: str, port: int = DEFAULT_PORT,
-                 timeout: float = 3.0):
+                 timeout: float = 20.0):
+        # ACK timeout. The FIRST atecc.auth_start on a freshly booted device also
+        # performs the one-time mbedTLS init + self-test (several ECDSA ops), so
+        # a few seconds is normal there.
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -50,8 +53,9 @@ class DeviceClient:
         if self._sock is not None:
             return
         try:
+            # Connect fast (5 s), then wait patiently for acks.
             self._sock = socket.create_connection((self.host, self.port),
-                                                  timeout=self.timeout)
+                                                  timeout=min(self.timeout, 5.0))
         except OSError as exc:
             raise DeviceError("cannot connect %s:%d: %s"
                               % (self.host, self.port, exc)) from None

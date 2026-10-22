@@ -22,6 +22,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "bsp.h"                     /* HAL_GetTick（计时用） */
 
 #include "mbedtls/platform.h"
 #include "mbedtls/bignum.h"
@@ -49,6 +50,22 @@ static uint8_t s_has_lic = 0u;       /* 1 = s_cur_lic is valid */
 
 /* Lazy init (first use, on the caller's task). */
 static int authsoft_ensure(void);
+
+/* Print the cost of the first few curve operations (P-256 at -O1 with
+ * ECP_WINDOW_SIZE=2 is not fast; this tells us the real numbers once). */
+static uint8_t s_timing_left = 8u;
+
+static void report_timing(const char *tag, uint32_t t0)
+{
+    if (s_timing_left == 0u) {
+        return;
+    }
+    s_timing_left--;
+    DebugUartLock();
+    printf("[AUTH-SW] %s took %lu ms\r\n", tag,
+           (unsigned long)(HAL_GetTick() - t0));
+    DebugUartUnlock();
+}
 
 /* Known-answer vector (generated on the PC with the same public test key).
  * Kept independent of the CA so this check survives CA rotation. */
@@ -115,6 +132,7 @@ int DSO_AuthSoft_VerifyDigest(const uint8_t pub[64], const uint8_t digest[32],
     mbedtls_mpi r;
     mbedtls_mpi s;
     unsigned char enc[65];
+    uint32_t t0;
     int rc = DSO_AUTH_ERR_SIG;
 
     if (pub == NULL || digest == NULL || sig == NULL) {
@@ -123,6 +141,7 @@ int DSO_AuthSoft_VerifyDigest(const uint8_t pub[64], const uint8_t digest[32],
     if (authsoft_ensure() != DSO_AUTH_OK) {
         return DSO_AUTH_ERR_INIT;
     }
+    t0 = HAL_GetTick();
 
     mbedtls_ecp_point_init(&q);
     mbedtls_mpi_init(&r);
@@ -145,6 +164,7 @@ int DSO_AuthSoft_VerifyDigest(const uint8_t pub[64], const uint8_t digest[32],
     mbedtls_mpi_free(&r);
     mbedtls_mpi_free(&s);
     mbedtls_ecp_point_free(&q);
+    report_timing("verify", t0);
     return rc;
 }
 
@@ -153,6 +173,7 @@ int DSO_AuthSoft_SignDigest(const uint8_t digest[32], uint8_t sig[64])
     mbedtls_mpi r;
     mbedtls_mpi s;
     mbedtls_mpi priv;
+    uint32_t t0;
     int rc = DSO_AUTH_ERR_SIG;
 
     if (digest == NULL || sig == NULL) {
@@ -161,6 +182,7 @@ int DSO_AuthSoft_SignDigest(const uint8_t digest[32], uint8_t sig[64])
     if (authsoft_ensure() != DSO_AUTH_OK) {
         return DSO_AUTH_ERR_INIT;
     }
+    t0 = HAL_GetTick();
 
     mbedtls_mpi_init(&r);
     mbedtls_mpi_init(&s);
@@ -178,6 +200,7 @@ int DSO_AuthSoft_SignDigest(const uint8_t digest[32], uint8_t sig[64])
     mbedtls_mpi_free(&r);
     mbedtls_mpi_free(&s);
     mbedtls_mpi_free(&priv);
+    report_timing("sign", t0);
 
     /* Worst-case stack of the `auth_start` path, measured on the real task. */
     if (s_boot == 0u && s_res_after_sign == 0u && rc == DSO_AUTH_OK) {
@@ -451,6 +474,7 @@ static int authsoft_ensure(void)
 
 static int authsoft_do_init(void)
 {
+    uint32_t t0 = HAL_GetTick();
     int rc;
 
     /* The arena installs the mbedtls_calloc/free hooks itself; it MUST run
@@ -477,6 +501,8 @@ static int authsoft_do_init(void)
     printf("[AUTH-SW] selftest %s (arena=%u B)\r\n",
            (rc == DSO_AUTH_OK) ? "sign=OK verify=OK" : "FAILED",
            (unsigned)sizeof(s_arena));
+    printf("[AUTH-SW] init total %lu ms\r\n",
+           (unsigned long)(HAL_GetTick() - t0));
     DebugUartUnlock();
     report_resources("after selftest");
     s_boot = 0u;
