@@ -82,6 +82,55 @@ python -m unittest tools.auth_server.e2e_test -v
 | `e2e_test.py` | 测试 |
 | `.state/` | 运行时生成：`ca_key.pem`、`store.json` —— **不要提交** |
 
+## HTTP API（常驻服务）
+
+```bash
+python -m tools.auth_server.http_api --port 8080
+# 首次启动生成 .state/admin_token（0600）；审计写 .state/audit.jsonl
+```
+
+端点与安全模型见 `Markdown/设备授权协议_v0.md` §12。快速示例：
+
+```bash
+TOKEN=$(cat tools/auth_server/.state/admin_token)
+
+# 管理员：建用户 / 登记设备（host/port 只在这里给）/ 绑定
+curl -s -X POST http://127.0.0.1:8080/api/admin/users \
+  -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"user":"stu001","password":"12345678"}'
+
+curl -s -X POST http://127.0.0.1:8080/api/admin/devices \
+  -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"device":"Eep21025E269FA2E","pubkey":"<128-hex>","host":"192.168.100.50","port":5005}'
+
+curl -s -X POST http://127.0.0.1:8080/api/admin/bindings \
+  -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"user":"stu001","device":"Eep21025E269FA2E","days":30}'
+
+# 学生：登录 -> 授权（服务端自己去驱动设备）
+SID=$(curl -s -X POST http://127.0.0.1:8080/api/session \
+  -H 'Content-Type: application/json' \
+  -d '{"user":"stu001","password":"12345678"}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['sid'])")
+
+curl -s -X POST http://127.0.0.1:8080/api/authorize \
+  -H 'Content-Type: application/json' \
+  -d "{\"sid\":\"$SID\",\"device\":\"Eep21025E269FA2E\"}"
+
+# 设备当前持有什么
+curl -s http://127.0.0.1:8080/api/device/Eep21025E269FA2E/license \
+  -H "X-Session: $SID"
+```
+
+> 默认只监听 `127.0.0.1`。要对外开放必须加 `--unsafe-lan`——**明文 HTTP，
+> 会话与凭据会在局域网上裸奔**，仅限实验环境。
+
+测试：
+
+```bash
+python -m unittest tools.auth_server.http_test -v     # 29 条
+```
+
 ## 模拟设备
 
 `dsosim/atecc.py` 提供"已预置"设备模型（软件 P-256 密钥），挂在 `dsosim` 的

@@ -36,10 +36,19 @@ PROOF_ATTEMPTS = 3
 PROOF_DEFINITIVE_FAILURES = 2       # 2 of 3 st=0x0F => identity_only
 LOGIN_MAX_FAILS = 5                 # brute-force guard (per account)
 LOGIN_LOCK_S = 300
+SESSION_TTL_S = 1800                # idle-ish lifetime of a login session
 
 
 class AuthError(RuntimeError):
-    """Policy or protocol violation."""
+    """Policy or protocol violation.
+
+    ``code`` is a stable machine-readable tag so the HTTP layer can map to a
+    status without matching on message text.
+    """
+
+    def __init__(self, message: str, code: str = "denied"):
+        super().__init__(message)
+        self.code = code
 
 
 class AuthService:
@@ -58,35 +67,50 @@ class AuthService:
     def _session(self, sid: str) -> dict:
         sess = self._sessions.get(sid)
         if sess is None:
-            raise AuthError("unknown or expired session")
+            raise AuthError("unknown or expired session", "session_expired")
+        if sess["expires"] < self._now():
+            del self._sessions[sid]
+            raise AuthError("session expired", "session_expired")
         return sess
+
+    def logout(self, sid: str) -> None:
+        self._sessions.pop(sid, None)
+
+    def session_expires(self, sid: str) -> int:
+        return int(self._session(sid)["expires"])
+
+    def validate_session(self, sid: str) -> str:
+        """Return the user bound to a live session (raises AuthError otherwise)."""
+        return str(self._session(sid)["user"])
 
     # ---- 1. login --------------------------------------------------------
     def login(self, user: str, password: str) -> str:
         now = self._now()
         if self._login_lock_until.get(user, 0.0) > now:
-            raise AuthError("too many failed attempts; account temporarily locked")
+            raise AuthError("too many failed attempts; account temporarily locked",
+                            "locked")
         if not self.store.check_password(user, password):
             fails = self._login_fails.get(user, 0) + 1
             self._login_fails[user] = fails
             if fails >= LOGIN_MAX_FAILS:
                 self._login_lock_until[user] = now + LOGIN_LOCK_S
                 self._login_fails[user] = 0
-            raise AuthError("bad credentials")
+            raise AuthError("bad credentials", "bad_credentials")
         self._login_fails.pop(user, None)
         sid = secrets.token_hex(8)
-        self._sessions[sid] = {"user": user, "proofs": set()}
+        self._sessions[sid] = {"user": user, "proofs": set(),
+                               "expires": now + SESSION_TTL_S}
         return sid
 
     # ---- 2. challenge ----------------------------------------------------
     def issue_challenge(self, sid: str, dev: str) -> str:
         sess = self._session(sid)
         if self.store.get_device(dev) is None:
-            raise AuthError("device is not registered")
+            raise AuthError("device is not registered", "device_unknown")
         now_off = self._now_off()
         self.store.expire_challenges(now_off)
         if self.store.count_open(dev, now_off) >= MAX_OPEN_CHALLENGES:
-            raise AuthError("too many open challenges for this device")
+            raise AuthError("too many open challenges for this device", "busy")
         nonce = os.urandom(32)
         digest = proto.make_challenge(dev, nonce, int(self._now()))
         self.store.put_challenge(digest.hex(), dev, sess["user"], sid,
@@ -100,27 +124,27 @@ class AuthService:
         sess = self._session(sid)
         entry = self.store.take_challenge(challenge_hex.lower())  # single use
         if entry is None:
-            raise AuthError("unknown or already used challenge")
+            raise AuthError("unknown or already used challenge", "challenge")
         if entry["expires"] < self._now_off():
-            raise AuthError("challenge expired")
+            raise AuthError("challenge expired", "challenge_expired")
         if entry["session"] != sid or entry["dev"] != dev:
-            raise AuthError("challenge was issued for another session/device")
+            raise AuthError("challenge was issued for another session/device", "challenge_mismatch")
         rec = self.store.get_device(dev)
         if rec is None:
-            raise AuthError("device is not registered")
+            raise AuthError("device is not registered", "device_unknown")
         if pubkey_hex is not None and pubkey_hex.lower() != rec["pubkey"]:
-            raise AuthError("device public key does not match enrollment")
+            raise AuthError("device public key does not match enrollment", "pubkey_mismatch")
         if int(self_verify) != 1:
-            raise AuthError("device self-verification failed")
+            raise AuthError("device self-verification failed", "proof")
         try:
             sig = sig_from_hex(sig_hex)
             pub = keystore.pub_from_hex(rec["pubkey"])
         except KeyFormatError as exc:
-            raise AuthError(str(exc)) from None
+            raise AuthError(str(exc), "proof") from None
         digest = bytes.fromhex(challenge_hex)
         # ATECC Sign emits high-s about half the time -> do NOT require low-s.
         if not keystore.verify_digest(pub, digest, sig, require_low_s=False):
-            raise AuthError("device proof signature is invalid")
+            raise AuthError("device proof signature is invalid", "proof")
         sess["proofs"].add(dev)
         return True
 
@@ -129,15 +153,15 @@ class AuthService:
                       ttl_s: int = 900) -> str:
         sess = self._session(sid)
         if dev not in sess["proofs"]:
-            raise AuthError("no completed device proof in this session")
+            raise AuthError("no completed device proof in this session", "proof_required")
         rec = self.store.get_device(dev)
         if rec is None:
-            raise AuthError("device is not registered")
+            raise AuthError("device is not registered", "device_unknown")
         if rec.get("capability") != "provisioned" and (perms & proto.PERM_FPGA):
-            raise AuthError("device is identity_only: FPGA permission refused")
+            raise AuthError("device is identity_only: FPGA permission refused", "capability")
         now_off = self._now_off()
         if self.store.find_binding(sess["user"], dev, now_off) is None:
-            raise AuthError("no active user<->device binding")
+            raise AuthError("no active user<->device binding", "no_binding")
         jti = secrets.token_hex(8)          # 64-bit + store uniqueness check
         lic = "L%05d" % self.store.next_seq()
         fields = {
@@ -162,23 +186,23 @@ class AuthService:
         payload, sig = proto.split_token(token)
         fields = proto.parse_payload(payload)
         if fields["kid"] != self.ca.kid:
-            raise AuthError("unknown CA key id")
+            raise AuthError("unknown CA key id", "bad_kid")
         digest = hashlib.sha256(payload).digest()
         if not keystore.verify_digest(self.ca.public_raw(), digest, sig,
                                       require_low_s=True):
-            raise AuthError("license signature is invalid")
+            raise AuthError("license signature is invalid", "bad_signature")
         if expect_dev is not None and fields["dev"] != expect_dev:
-            raise AuthError("license is bound to another device")
+            raise AuthError("license is bound to another device", "device_mismatch")
         rec = self.store.get_license(fields["jti"])
         if rec is None:
-            raise AuthError("unknown license id (not issued by this service)")
+            raise AuthError("unknown license id (not issued by this service)", "license_unknown")
         if rec["revoked"] or self.store.is_revoked(fields["jti"]):
-            raise AuthError("license revoked")
+            raise AuthError("license revoked", "revoked")
         now_off = self._now_off()
         if now_off < fields["nb"]:
-            raise AuthError("license not yet valid")
+            raise AuthError("license not yet valid", "not_yet")
         if now_off > fields["na"]:
-            raise AuthError("license expired")
+            raise AuthError("license expired", "expired")
         return fields
 
     def revoke(self, jti: str) -> None:
@@ -313,6 +337,7 @@ def _cmd_verify(args) -> int:
 def _cmd_flow(args) -> int:
     """Run the whole chain against a live device: proof -> license -> verify."""
     from .device_client import DeviceClient, DeviceError
+    from .flow import FlowError, authorize
 
     svc, store, _ca = _service()
     pwd = args.password or input("password for %s: " % args.user)
@@ -330,33 +355,26 @@ def _cmd_flow(args) -> int:
                 return 2
 
             sid = svc.login(args.user, pwd)
-            challenge = svc.issue_challenge(sid, dev)
-            print("challenge   :", challenge)
-            ack = client.auth_start(challenge)
-            if ack.get("result") != "ok":
-                print("auth_start FAILED:", ack.get("error"))
-                print("  (an unlocked ATECC answers st=0x0F here; enable")
-                print("   DSO_AUTH_DEV_SOFTKEY in the firmware for the DEV path)")
-                return 3
-            print("signature   :", ack["data"]["signature_hex"][:32], "...")
-            svc.verify_proof(sid, dev, challenge,
-                             ack["data"]["signature_hex"],
-                             ack["data"]["pubkey_hex"],
-                             ack["data"]["self_verify"])
+            res = authorize(svc, client, sid, dev, ttl_s=args.ttl)
+            print("challenge   :", res["challenge"])
+            print("signature   :", res["signature_hex"][:32], "...")
             print("device proof: OK")
-
-            token = svc.issue_license(sid, dev, ttl_s=args.ttl)
-            print("license     :", token[:40], "... (%d bytes)" % len(token))
-            ack = client.auth_verify(token, dev)
-            if ack.get("result") != "ok":
-                print("auth_verify FAILED:", ack.get("error"))
-                return 4
-            data = ack.get("data", {})
+            print("license     :", res["token"][:40], "... (%d bytes)"
+                  % len(res["token"]))
+            data = res["ack"]
             print("verify      : OK  lic=%s user=%s na=%s perm=%s"
                   % (data.get("lic"), data.get("user"), data.get("na"),
                      data.get("perm")))
             print("=> full authorization chain works on this device")
             return 0
+    except FlowError as exc:
+        print("flow stopped at %s: %s" % (exc.code, exc))
+        if exc.detail:
+            print("  detail:", exc.detail)
+        if exc.code == "device_proof_failed":
+            print("  (an unlocked ATECC answers st=0x0F here; enable")
+            print("   DSO_AUTH_DEV_SOFTKEY in the firmware for the DEV path)")
+        return 4
     except (DeviceError, AuthError) as exc:
         print("flow stopped:", exc)
         if "no reply" in str(exc):
@@ -407,6 +425,7 @@ def _cmd_revoke(args) -> int:
 def _cmd_renew(args) -> int:
     """Renew a license on a live device: proof -> new license -> push to device."""
     from .device_client import DeviceClient, DeviceError
+    from .flow import FlowError, authorize
 
     svc, _store, _ca = _service()
     pwd = args.password or input("password for %s: " % args.user)
@@ -418,25 +437,17 @@ def _cmd_renew(args) -> int:
                 return 2
             dev = ack["data"]["device_id"]
             sid = svc.login(args.user, pwd)
-            challenge = svc.issue_challenge(sid, dev)
-            ack = client.auth_start(challenge)
-            if ack.get("result") != "ok":
-                print("auth_start failed:", ack.get("error"))
-                return 3
-            svc.verify_proof(sid, dev, challenge,
-                             ack["data"]["signature_hex"],
-                             ack["data"]["pubkey_hex"],
-                             ack["data"]["self_verify"])
-            token = svc.issue_license(sid, dev, ttl_s=args.ttl)
-            ack = client.auth_verify(token, dev)
-            if ack.get("result") != "ok":
-                print("device rejected the new license:", ack.get("error"))
-                return 4
-            data = ack.get("data", {})
+            res = authorize(svc, client, sid, dev, ttl_s=args.ttl)
+            data = res["ack"]
             print("renewed     : lic=%s user=%s na=%s"
                   % (data.get("lic"), data.get("user"), data.get("na")))
             print("device now holds the new license (check with `license`)")
             return 0
+    except FlowError as exc:
+        print("renew refused at %s: %s" % (exc.code, exc))
+        if exc.detail:
+            print("  detail:", exc.detail)
+        return 4
     except (DeviceError, AuthError) as exc:
         print("renew refused:", exc)
         return 5

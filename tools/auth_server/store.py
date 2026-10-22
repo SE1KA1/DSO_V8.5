@@ -105,20 +105,43 @@ class Store:
     def has_user(self, user: str) -> bool:
         return user in self.data["users"]
 
+    def list_users(self) -> list[str]:
+        return sorted(self.data["users"].keys())
+
     # ---- devices ---------------------------------------------------------
     def register_device(self, dev: str, pubkey_hex: str, kid: str = "k1",
-                        capability: str = "provisioned") -> None:
-        """Out-of-band/admin enrollment: never call this from an online path."""
-        self.data["devices"][dev] = {
+                        capability: str = "provisioned",
+                        host: str | None = None, port: int = 5005,
+                        overwrite: bool = True) -> None:
+        """Out-of-band/admin enrollment: never call this from an online path.
+
+        ``host``/``port`` are the device's TCP command endpoint. They are set
+        HERE (by an administrator), never taken from a request body — otherwise
+        the API would become a LAN scanner.
+        """
+        if not overwrite and dev in self.data["devices"]:
+            raise ValueError("device already registered")
+        rec = self.data["devices"].get(dev, {})
+        rec.update({
             "pubkey": pubkey_hex.lower(),
             "kid": kid,
             "capability": capability,
             "registered_at": int(time.time()),
-        }
+        })
+        if host is not None:
+            rec["host"] = host
+            rec["port"] = int(port)
+        self.data["devices"][dev] = rec
         self.save()
 
     def get_device(self, dev: str) -> dict | None:
         return self.data["devices"].get(dev)
+
+    def list_devices(self) -> dict:
+        return dict(self.data["devices"])
+
+    def list_bindings(self) -> list:
+        return list(self.data["bindings"])
 
     def set_capability(self, dev: str, capability: str) -> None:
         rec = self.data["devices"].get(dev)
