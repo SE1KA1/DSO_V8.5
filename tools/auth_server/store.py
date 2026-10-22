@@ -182,7 +182,21 @@ class Store:
         self.save()
 
     # ---- bindings (user <-> device) --------------------------------------
-    def add_binding(self, user: str, dev: str, nb: int, na: int) -> None:
+    def add_binding(self, user: str, dev: str, nb: int, na: int,
+                    replace: bool = False) -> None:
+        """Add a binding; refuses to duplicate an active one unless replace=True.
+
+        An "active" binding is one that is not revoked and whose end is still in
+        the future relative to the new binding's start. Expired ones never block.
+        """
+        active = [b for b in self.data["bindings"]
+                  if b["user"] == user and b["dev"] == dev
+                  and not b["revoked"] and b["na"] >= nb]
+        if active and not replace:
+            until = max(b["na"] for b in active)
+            raise ValueError("binding already exists until %d" % until)
+        for b in active:
+            b["revoked"] = True
         self.data["bindings"].append(
             {"user": user, "dev": dev, "nb": nb, "na": na, "revoked": False})
         self.save()
@@ -236,6 +250,23 @@ class Store:
 
     def get_license(self, jti: str) -> dict | None:
         return self.data["licenses"].get(jti)
+
+    def list_licenses(self) -> list[dict]:
+        """All issued licenses, newest first, with their jti included."""
+        out = [dict(rec, jti=jti) for jti, rec in self.data["licenses"].items()]
+        out.sort(key=lambda r: r.get("lic", ""), reverse=True)
+        return out
+
+    def revoke_by_lic(self, lic: str) -> str:
+        """Revoke by human-facing license number; returns the jti."""
+        for jti, rec in self.data["licenses"].items():
+            if rec.get("lic") == lic:
+                if rec["revoked"]:
+                    raise ValueError("license already revoked")
+                rec["revoked"] = True
+                self.save()
+                return jti
+        raise KeyError(lic)
 
     def revoke_license(self, jti: str) -> None:
         rec = self.data["licenses"].get(jti)

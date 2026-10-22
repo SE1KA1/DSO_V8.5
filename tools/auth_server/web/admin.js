@@ -39,13 +39,49 @@
         var tr = document.createElement("tr");
         A.cell(tr, d.device, "mono");
         var cap = A.cell(tr, "");
-        cap.appendChild(A.badge(d.capability,
-          d.capability === "provisioned" ? "on" : "warn"));
+        var badge = A.badge(d.capability,
+          d.capability === "provisioned" ? "on" : "warn");
+        badge.title = d.capability === "provisioned"
+          ? "可完成设备证明（auth_start 成功）→ 可签发含 FPGA 权限的 License"
+          : "只能上报设备号（auth_start 失败，例如 ATECC 未锁定）→ 无法完成证明，不会签发任何 License";
+        cap.appendChild(badge);
         A.cell(tr, d.host ? (d.host + ":" + d.port) : "未登记", "mono");
         A.cell(tr, d.bindings);
         body.appendChild(tr);
       });
       A.setMsg(msg, "共 " + data.devices.length + " 台设备", "ok");
+    } catch (e) {
+      if (!onAuthError(e, msg)) A.setMsg(msg, "加载失败：" + e.code + " — " + e.message, "err");
+    }
+  }
+
+  async function loadLicenses() {
+    var msg = A.el("licensesMsg");
+    if (!needToken(msg)) return;
+    try {
+      var data = await A.api("GET", "/api/admin/licenses", undefined, hdr());
+      var body = A.el("licensesBody");
+      body.textContent = "";
+      data.licenses.slice(0, 100).forEach(function (l) {
+        var tr = document.createElement("tr");
+        A.cell(tr, l.lic, "mono");
+        A.cell(tr, l.user);
+        A.cell(tr, l.dev, "mono");
+        A.cell(tr, A.fmtOffset(l.na));
+        var st = A.cell(tr, "");
+        st.appendChild(A.badge(l.revoked ? "已吊销" : "有效", l.revoked ? "off" : "on"));
+        var act = document.createElement("td");
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "danger";
+        btn.textContent = "吊销";
+        btn.disabled = !!l.revoked;
+        btn.dataset.lic = l.lic;
+        act.appendChild(btn);
+        tr.appendChild(act);
+        body.appendChild(tr);
+      });
+      A.setMsg(msg, "共 " + data.licenses.length + " 张", "ok");
     } catch (e) {
       if (!onAuthError(e, msg)) A.setMsg(msg, "加载失败：" + e.code + " — " + e.message, "err");
     }
@@ -85,6 +121,7 @@
       await A.api("POST", path, body, hdr());
       A.setMsg(msgNode, okText, "ok");
       await loadDevices();
+      await loadLicenses();
       await loadAudit();
     } catch (e) {
       if (!onAuthError(e, msgNode)) {
@@ -99,11 +136,20 @@
     sessionStorage.setItem(KEY, token);
     A.setMsg(A.el("tokenMsg"), "已保存（仅本标签页有效）", "ok");
     loadDevices();
+    loadLicenses();
     loadAudit();
   });
 
   A.el("loadDevices").addEventListener("click", loadDevices);
+  A.el("loadLicenses").addEventListener("click", loadLicenses);
   A.el("loadAudit").addEventListener("click", loadAudit);
+
+  A.el("licensesBody").addEventListener("click", function (ev) {
+    var btn = ev.target.closest("button[data-lic]");
+    if (!btn) return;
+    post("/api/admin/revoke", { lic: btn.dataset.lic },
+         A.el("licensesMsg"), "License 已吊销");
+  });
 
   A.el("addUser").addEventListener("click", function () {
     post("/api/admin/users",
@@ -127,12 +173,15 @@
     post("/api/admin/bindings", {
       user: A.el("bindUser").value.trim(),
       device: A.el("bindDev").value.trim(),
-      days: isNaN(days) ? 30 : days
+      days: isNaN(days) ? 30 : days,
+      replace: A.el("bindReplace").checked
     }, A.el("bindMsg"), "绑定已创建");
   });
 
   A.el("revokeJtiBtn").addEventListener("click", function () {
-    post("/api/admin/revoke", { jti: A.el("revokeJti").value.trim() },
+    var v = A.el("revokeJti").value.trim();
+    if (!v) { A.setMsg(A.el("revokeMsg"), "请输入 License 号或 jti", "err"); return; }
+    post("/api/admin/revoke", /^L\d+$/i.test(v) ? { lic: v } : { jti: v },
          A.el("revokeMsg"), "License 已吊销");
   });
 
@@ -150,6 +199,7 @@
     A.el("token").value = token;
     A.setMsg(A.el("tokenMsg"), "已从本标签页恢复令牌", "info");
     loadDevices();
+    loadLicenses();
     loadAudit();
     if (A.el("autoAudit").checked) auditTimer = setInterval(loadAudit, 10000);
   }

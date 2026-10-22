@@ -133,6 +133,15 @@ curl -s http://127.0.0.1:8080/api/device/Eep21025E269FA2E/license \
 > 默认只监听 `127.0.0.1`。要对外开放必须加 `--unsafe-lan`——**明文 HTTP，
 > 会话与凭据会在局域网上裸奔**，仅限实验环境。
 
+管理端小抄：
+
+- 吊销支持 **License 号**（`{"lic":"L00005"}`）或 **jti**（`{"jti":"..."}`）或整机（`{"device":"..."}`）；
+  界面上 "License 台账" 每行都有吊销按钮。
+- 同一账号 + 同一设备只允许一条**有效**绑定：重复提交会回 `409 binding_exists`；
+  改期限用 `{"replace":true}`（CLI 用 `bind … --force`）。
+- `provisioned` = 能完成设备证明（可授权）；`identity_only` = 只能报设备号（拿不到 License）。
+  详见协议文档 §5.1。
+
 测试：
 
 ```bash

@@ -310,8 +310,20 @@ def _cmd_register(args) -> int:
 
 def _cmd_bind(args) -> int:
     _svc, store, _ca = _service()
+    if not store.has_user(args.user):
+        print("unknown user:", args.user)
+        return 2
+    if store.get_device(args.device) is None:
+        print("unknown device:", args.device)
+        return 2
     now_off = proto.now_offset()
-    store.add_binding(args.user, args.device, now_off, now_off + args.days * 86400)
+    try:
+        store.add_binding(args.user, args.device, now_off,
+                          now_off + args.days * 86400, replace=args.force)
+    except ValueError as exc:
+        print("bind refused:", exc)
+        print("  use --force to replace the existing binding")
+        return 3
     print("binding added:", args.user, "<->", args.device, "for", args.days, "days")
     return 0
 
@@ -618,6 +630,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("user")
     p.add_argument("device")
     p.add_argument("--days", type=int, default=30)
+    p.add_argument("--force", action="store_true",
+                   help="replace an existing active binding for this pair")
     p.set_defaults(func=_cmd_bind)
 
     p = sub.add_parser("probe", help="read-only capability probe over TCP")

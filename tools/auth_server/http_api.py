@@ -291,6 +291,10 @@ class AuthHandler(BaseHTTPRequestHandler):
             self._need(method, "POST")
             self._post_admin_revoke()
             return
+        if path == "/api/admin/licenses":
+            self._need(method, "GET")
+            self._get_admin_licenses()
+            return
         if path == "/api/admin/audit":
             self._need(method, "GET")
             self._get_admin_audit()
@@ -501,6 +505,9 @@ class AuthHandler(BaseHTTPRequestHandler):
             raise ApiError(400, "bad_device", "device must be 16 alphanumerics")
         if isinstance(days, bool) or not isinstance(days, int) or not (1 <= days <= 3650):
             raise ApiError(400, "bad_days", "days must be 1..3650")
+        replace = body.get("replace", False)
+        if not isinstance(replace, bool):
+            raise ApiError(400, "bad_request", "replace must be a boolean")
         ctx = self.ctx
         with ctx.svc_lock:
             if not ctx.store.has_user(user):
@@ -508,10 +515,14 @@ class AuthHandler(BaseHTTPRequestHandler):
             if ctx.store.get_device(dev) is None:
                 raise ApiError(404, "device_unknown", "unknown device")
             now = ctx.svc._now_off()
-            ctx.store.add_binding(user, dev, now, now + days * 86400)
+            try:
+                ctx.store.add_binding(user, dev, now, now + days * 86400,
+                                      replace=replace)
+            except ValueError as exc:
+                raise ApiError(409, "binding_exists", str(exc)) from None
         ctx.audit.write("admin_binding_added", user=user, device=dev, days=days,
-                        peer=self.client_address[0])
-        self._send_json(201, {"ok": True})
+                        replaced=replace, peer=self.client_address[0])
+        self._send_json(201, {"ok": True, "replaced": replace})
 
     def _post_admin_revoke(self) -> None:
         self._admin()
@@ -529,6 +540,23 @@ class AuthHandler(BaseHTTPRequestHandler):
             ctx.audit.write("admin_revoke_license", jti=jti, peer=self.client_address[0])
             self._send_json(200, {"ok": True, "jti": jti})
             return
+        lic = body.get("lic")
+        if lic is not None:
+            # The operator sees "L00005" in the UI, not the jti — accept both.
+            if not isinstance(lic, str) or not (1 <= len(lic) <= 16):
+                raise ApiError(400, "bad_lic", "bad license number")
+            with ctx.svc_lock:
+                try:
+                    jti = ctx.store.revoke_by_lic(lic)
+                except KeyError:
+                    raise ApiError(404, "license_unknown",
+                                   "unknown license number: %s" % lic) from None
+                except ValueError as exc:
+                    raise ApiError(409, "already_revoked", str(exc)) from None
+            ctx.audit.write("admin_revoke_license", jti=jti, lic=lic,
+                            peer=self.client_address[0])
+            self._send_json(200, {"ok": True, "lic": lic, "jti": jti})
+            return
         if dev is not None:
             if not isinstance(dev, str) or not DEVICE_RE.match(dev):
                 raise ApiError(400, "bad_device", "device must be 16 alphanumerics")
@@ -539,6 +567,12 @@ class AuthHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "device": dev, "records": n})
             return
         raise ApiError(400, "bad_request", "give jti or device")
+
+    def _get_admin_licenses(self) -> None:
+        self._admin()
+        with self.ctx.svc_lock:
+            items = self.ctx.store.list_licenses()
+        self._send_json(200, {"ok": True, "licenses": items})
 
     def _get_admin_devices(self) -> None:
         self._admin()

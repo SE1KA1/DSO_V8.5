@@ -486,6 +486,53 @@ class TestAdmin(Base):
                                     self.ADMIN_H)
         self.assertEqual(status, 404)
 
+    def test_revoke_by_license_number(self) -> None:
+        sid = self.login()
+        status, body, _ = self.post("/api/authorize", {"sid": sid, "device": DEV_ID})
+        self.assertEqual(status, 200, body)
+        lic = body["lic"]
+
+        status, listing, _ = self.get("/api/admin/licenses", self.ADMIN_H)
+        self.assertEqual(status, 200)
+        entry = next(x for x in listing["licenses"] if x["lic"] == lic)
+        self.assertFalse(entry["revoked"])
+        self.assertTrue(entry.get("jti"))
+
+        status, body, _ = self.post("/api/admin/revoke", {"lic": lic}, self.ADMIN_H)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["lic"], lic)
+
+        status, listing, _ = self.get("/api/admin/licenses", self.ADMIN_H)
+        entry = next(x for x in listing["licenses"] if x["lic"] == lic)
+        self.assertTrue(entry["revoked"])
+
+        # second attempt is a conflict, unknown numbers are 404
+        status, _, _ = self.post("/api/admin/revoke", {"lic": lic}, self.ADMIN_H)
+        self.assertEqual(status, 409)
+        status, _, _ = self.post("/api/admin/revoke", {"lic": "L99999"}, self.ADMIN_H)
+        self.assertEqual(status, 404)
+
+    def test_duplicate_binding_refused(self) -> None:
+        body = {"user": USER, "device": DEV_ID, "days": 30}
+        status, resp, _ = self.post("/api/admin/bindings", body, self.ADMIN_H)
+        self.assertEqual(status, 409)
+        self.assertEqual(resp["code"], "binding_exists")
+
+        body["replace"] = True
+        status, _, _ = self.post("/api/admin/bindings", body, self.ADMIN_H)
+        self.assertEqual(status, 201)
+
+        # exactly one active binding remains
+        status, listing, _ = self.get("/api/admin/devices", self.ADMIN_H)
+        self.assertEqual(status, 200)
+        self.assertEqual(listing["devices"][0]["bindings"], 1)
+
+    def test_licenses_requires_admin(self) -> None:
+        status, _, _ = self.get("/api/admin/licenses")
+        self.assertEqual(status, 401)
+        status, _, _ = self.get("/api/admin/licenses", {"X-Admin-Token": "no"})
+        self.assertEqual(status, 401)
+
     def test_devices_listing(self) -> None:
         status, body, _ = self.get("/api/admin/devices", self.ADMIN_H)
         self.assertEqual(status, 200)

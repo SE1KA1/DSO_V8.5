@@ -78,15 +78,32 @@
         <label for="bindUser">账号</label><input id="bindUser">
         <label for="bindDev">设备</label><input id="bindDev">
         <label for="bindDays">天数</label><input id="bindDays" value="30" size="6">
+        <label><input id="bindReplace" type="checkbox" style="min-width:auto"> 覆盖已有绑定</label>
         <button id="addBind" type="button">绑定</button>
       </div>
       <div class="msg" id="bindMsg"></div>
+      <small class="note">同一账号与同一设备只允许一条有效绑定；需要改期限时勾选"覆盖已有绑定"。</small>
+    </section>
+
+    <section class="card">
+      <h2>License 台账 <span class="hint">最近 100 张，可直接吊销</span></h2>
+      <div class="row">
+        <button id="loadLicenses" type="button">刷新</button>
+      </div>
+      <div class="msg" id="licensesMsg"></div>
+      <table>
+        <thead>
+          <tr><th>License</th><th>用户</th><th>设备</th><th>到期</th><th>状态</th><th></th></tr>
+        </thead>
+        <tbody id="licensesBody"></tbody>
+      </table>
     </section>
 
     <section class="card">
       <h2>吊销 <span class="hint">二选一：单张 License 或整台设备</span></h2>
       <div class="row">
-        <label for="revokeJti">jti</label><input id="revokeJti" placeholder="License 号">
+        <label for="revokeJti">License</label>
+        <input id="revokeJti" placeholder="L00005 或 jti">
         <button id="revokeJtiBtn" type="button" class="danger">吊销 License</button>
       </div>
       <div class="row">
