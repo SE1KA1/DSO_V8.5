@@ -15,7 +15,9 @@ Design notes (see Markdown/设备授权协议_v0.md §12):
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -25,7 +27,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote_plus, urlsplit
 
 from .audit import AuditLog
 from .device_client import DeviceClient, DeviceError, DeviceTimeout
@@ -298,6 +300,10 @@ class AuthHandler(BaseHTTPRequestHandler):
         if path == "/api/admin/audit":
             self._need(method, "GET")
             self._get_admin_audit()
+            return
+        if path == "/api/admin/audit/export":
+            self._need(method, "GET")
+            self._get_admin_audit_export()
             return
         if path == "/api/devices":
             self._need(method, "GET")
@@ -579,6 +585,7 @@ class AuthHandler(BaseHTTPRequestHandler):
         with self.ctx.svc_lock:
             devices = self.ctx.store.list_devices()
             bindings = self.ctx.store.list_bindings()
+            licenses = self.ctx.store.list_licenses()
         out = []
         for dev, rec in sorted(devices.items()):
             out.append({"device": dev,
@@ -587,25 +594,63 @@ class AuthHandler(BaseHTTPRequestHandler):
                         "host": rec.get("host"),
                         "port": rec.get("port"),
                         "bindings": sum(1 for b in bindings
-                                        if b["dev"] == dev and not b["revoked"])})
+                                        if b["dev"] == dev and not b["revoked"]),
+                        "licenses": sum(1 for l in licenses
+                                        if l.get("dev") == dev)})
         self._send_json(200, {"ok": True, "users": self.ctx.store.list_users(),
                               "devices": out})
 
+    def _query_pairs(self) -> dict:
+        pairs = {}
+        query = urlsplit(self.path).query
+        for part in query.split("&") if query else []:
+            key, _, value = part.partition("=")
+            if key:
+                pairs[key] = unquote_plus(value)
+        return pairs
+
+    def _audit_filters(self) -> tuple[str | None, str | None]:
+        pairs = self._query_pairs()
+        event = pairs.get("event") or None
+        device = pairs.get("device") or None
+        if event is not None and not re.fullmatch(r"[a-z0-9_]{1,32}", event):
+            raise ApiError(400, "bad_event", "bad event filter")
+        if device is not None and not DEVICE_RE.match(device):
+            raise ApiError(400, "bad_device", "device must be 16 alphanumerics")
+        return event, device
+
     def _get_admin_audit(self) -> None:
         self._admin()
+        pairs = self._query_pairs()
         limit = 100
-        query = urlsplit(self.path).query
-        if query:
-            for part in query.split("&"):
-                key, _, value = part.partition("=")
-                if key == "limit":
-                    try:
-                        limit = int(value)
-                    except ValueError:
-                        raise ApiError(400, "bad_limit", "limit must be an integer") from None
+        if "limit" in pairs:
+            try:
+                limit = int(pairs["limit"])
+            except ValueError:
+                raise ApiError(400, "bad_limit", "limit must be an integer") from None
         if limit < 0 or limit > 500:
             raise ApiError(400, "bad_limit", "limit must be 0..500")
-        self._send_json(200, {"ok": True, "events": self.ctx.audit.tail(limit)})
+        event, device = self._audit_filters()
+        events = self.ctx.audit.tail(limit, event=event, device=device)
+        self._send_json(200, {"ok": True, "events": events,
+                              "filter": {"event": event, "device": device}})
+
+    def _get_admin_audit_export(self) -> None:
+        self._admin()
+        event, device = self._audit_filters()
+        rows = self.ctx.audit.tail(500, event=event, device=device)
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["ts", "event", "user", "device", "lic", "jti", "peer", "detail"])
+        for rec in rows:
+            writer.writerow([rec.get("ts", ""), rec.get("event", ""),
+                             rec.get("user", ""), rec.get("device", ""),
+                             rec.get("lic", ""), rec.get("jti", ""),
+                             rec.get("peer", ""), rec.get("detail", "")])
+        body = buf.getvalue().encode("utf-8")
+        self._send_bytes(200, body, "text/csv; charset=utf-8",
+                         extra={"Content-Disposition":
+                                'attachment; filename="audit.csv"'})
 
     # ---- device list for the student page --------------------------------
     def _get_devices(self) -> None:
@@ -647,7 +692,8 @@ class AuthHandler(BaseHTTPRequestHandler):
         return True
 
     # ---- response --------------------------------------------------------
-    def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+    def _send_bytes(self, status: int, body: bytes, content_type: str,
+                    extra: dict | None = None) -> None:
         if getattr(self, "_sent", False):
             return
         try:
@@ -657,6 +703,8 @@ class AuthHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Security-Policy", CSP)
+            for key, value in (extra or {}).items():
+                self.send_header(key, value)
             self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)

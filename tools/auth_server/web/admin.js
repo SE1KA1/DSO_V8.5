@@ -47,6 +47,7 @@
         cap.appendChild(badge);
         A.cell(tr, d.host ? (d.host + ":" + d.port) : "未登记", "mono");
         A.cell(tr, d.bindings);
+        A.cell(tr, d.licenses);
         body.appendChild(tr);
       });
       A.setMsg(msg, "共 " + data.devices.length + " 台设备", "ok");
@@ -87,11 +88,50 @@
     }
   }
 
+  function auditQuery() {
+    var params = [];
+    var ev = A.el("auditEvent").value.trim();
+    var dev = A.el("auditDevice").value.trim();
+    if (ev) params.push("event=" + encodeURIComponent(ev));
+    if (dev) params.push("device=" + encodeURIComponent(dev));
+    return params.length ? "&" + params.join("&") : "";
+  }
+
+  async function exportAudit() {
+    var msg = A.el("auditMsg");
+    if (!needToken(msg)) return;
+    try {
+      var res = await fetch("/api/admin/audit/export" + auditQuery().replace(/^&/, "?"),
+                            { headers: hdr(), credentials: "same-origin" });
+      if (!res.ok) {
+        var body = null;
+        try { body = await res.json(); } catch (e) { /* ignore */ }
+        var err = new Error((body && body.error) || ("HTTP " + res.status));
+        err.status = res.status;
+        err.code = body && body.code;
+        throw err;
+      }
+      var blob = await res.blob();
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "audit.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      A.setMsg(msg, "已导出 CSV", "ok");
+    } catch (e) {
+      if (!onAuthError(e, msg)) A.setMsg(msg, "导出失败：" + (e.code || e.message), "err");
+    }
+  }
+
   async function loadAudit() {
     var msg = A.el("auditMsg");
     if (!needToken(msg)) return;
     try {
-      var data = await A.api("GET", "/api/admin/audit?limit=100", undefined, hdr());
+      var data = await A.api("GET", "/api/admin/audit?limit=100" + auditQuery(),
+                             undefined, hdr());
       var body = A.el("auditBody");
       body.textContent = "";
       data.events.slice().reverse().forEach(function (ev) {
@@ -143,6 +183,9 @@
   A.el("loadDevices").addEventListener("click", loadDevices);
   A.el("loadLicenses").addEventListener("click", loadLicenses);
   A.el("loadAudit").addEventListener("click", loadAudit);
+  A.el("exportAudit").addEventListener("click", exportAudit);
+  A.el("auditEvent").addEventListener("change", loadAudit);
+  A.el("auditDevice").addEventListener("change", loadAudit);
 
   A.el("licensesBody").addEventListener("click", function (ev) {
     var btn = ev.target.closest("button[data-lic]");

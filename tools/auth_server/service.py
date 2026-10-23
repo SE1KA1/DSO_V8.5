@@ -329,7 +329,13 @@ def _cmd_bind(args) -> int:
 
 
 def _cmd_probe(args) -> int:
-    out = probe_device(args.host, args.port)
+    from .device_client import DeviceError
+
+    try:
+        out = probe_device(args.host, args.port)
+    except DeviceError as exc:
+        print("device error:", exc)
+        return 2
     for key in ("device_id", "pubkey_hex", "capability"):
         print("%-12s %s" % (key + ":", out[key]))
     for note in out["notes"]:
@@ -343,7 +349,11 @@ def _cmd_probe(args) -> int:
 
 def _cmd_verify(args) -> int:
     svc, _store, _ca = _service()
-    fields = svc.verify_license(args.token, args.device)
+    try:
+        fields = svc.verify_license(args.token, args.device)
+    except (AuthError, proto.TokenError) as exc:
+        print("verify refused:", exc)
+        return 2
     for k in sorted(fields):
         print("%-6s %s" % (k + ":", fields[k]))
     return 0

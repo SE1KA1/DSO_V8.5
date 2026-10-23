@@ -5,6 +5,8 @@
 
 协议格式与安全边界见 **`Markdown/设备授权协议_v0.md`**。
 
+**部署 / 备份 / CA 轮换 / 故障排查 / 已知限制**：见 **`Markdown/授权服务部署与运维.md`**。
+
 ## 运行环境（先看这条）
 
 - **必须在仓库根目录执行**（`cd D:\DSO_V8.5`）：`python -m tools.…` 要求根目录在 `sys.path` 上。
@@ -132,6 +134,12 @@ curl -s http://127.0.0.1:8080/api/device/Eep21025E269FA2E/license \
 
 > 默认只监听 `127.0.0.1`。要对外开放必须加 `--unsafe-lan`——**明文 HTTP，
 > 会话与凭据会在局域网上裸奔**，仅限实验环境。
+
+审计与运维：
+
+- 审计按事件/设备过滤：`/api/admin/audit?limit=100&event=authorize_ok&device=Eep…`
+- 导出 CSV：`/api/admin/audit/export`（需 admin token，界面上的"导出 CSV"走同一个端点）
+- 日志超过 2 MB 自动轮转为 `audit.jsonl.1`（只保留一代）
 
 管理端小抄：
 

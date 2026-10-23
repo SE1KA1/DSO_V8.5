@@ -533,6 +533,48 @@ class TestAdmin(Base):
         status, _, _ = self.get("/api/admin/licenses", {"X-Admin-Token": "no"})
         self.assertEqual(status, 401)
 
+    def test_audit_filter_by_event(self) -> None:
+        self.login()
+        status, body, _ = self.get("/api/admin/audit?event=login_ok", self.ADMIN_H)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["events"])
+        self.assertTrue(all(e["event"] == "login_ok" for e in body["events"]))
+
+    def test_audit_filter_by_device(self) -> None:
+        sid = self.login()
+        self.post("/api/authorize", {"sid": sid, "device": DEV_ID})
+        status, body, _ = self.get("/api/admin/audit?device=%s" % DEV_ID, self.ADMIN_H)
+        self.assertEqual(status, 200)
+        self.assertTrue(any(e["event"] == "authorize_ok" for e in body["events"]))
+        self.assertTrue(all(e.get("device") == DEV_ID for e in body["events"]))
+
+    def test_audit_bad_filter(self) -> None:
+        status, _, _ = self.get("/api/admin/audit?event=BANG!", self.ADMIN_H)
+        self.assertEqual(status, 400)
+
+    def test_audit_export_csv(self) -> None:
+        sid = self.login()
+        self.post("/api/authorize", {"sid": sid, "device": DEV_ID})
+        status, body, headers = self.get("/api/admin/audit/export", self.ADMIN_H)
+        self.assertEqual(status, 200)
+        self.assertIn("text/csv", headers.get("Content-Type", ""))
+        self.assertIn("attachment", headers.get("Content-Disposition", ""))
+        raw = body.get("_raw", "")
+        self.assertTrue(raw.startswith("ts,event"), raw[:40])
+        self.assertIn("authorize_ok", raw)
+
+    def test_audit_export_requires_admin(self) -> None:
+        status, _, _ = self.get("/api/admin/audit/export")
+        self.assertEqual(status, 401)
+
+    def test_device_row_includes_license_count(self) -> None:
+        sid = self.login()
+        self.post("/api/authorize", {"sid": sid, "device": DEV_ID})
+        status, body, _ = self.get("/api/admin/devices", self.ADMIN_H)
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(body["devices"][0]["licenses"], 1)
+
+
     def test_devices_listing(self) -> None:
         status, body, _ = self.get("/api/admin/devices", self.ADMIN_H)
         self.assertEqual(status, 200)
@@ -556,6 +598,34 @@ class TestAdmin(Base):
         self.assertNotIn(ADMIN, raw)          # nor the admin token
         sid = self.login()
         self.assertNotIn(sid, raw)            # nor raw session ids
+
+
+class TestAuditRotation(unittest.TestCase):
+    def test_rotates_and_keeps_one_backup(self) -> None:
+        from tools.auth_server.audit import AuditLog
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audit.jsonl"
+            log = AuditLog(path, max_bytes=200)
+            for i in range(30):
+                log.write("evt", n=i, user="u", device=DEV_ID)
+            self.assertTrue(path.exists())
+            backup = Path(tmp) / "audit.jsonl.1"
+            self.assertTrue(backup.exists())
+            for target in (path, backup):
+                for line in target.read_text(encoding="utf-8").splitlines():
+                    json.loads(line)          # every line stays valid JSON
+
+    def test_tail_filters(self) -> None:
+        from tools.auth_server.audit import AuditLog
+        with tempfile.TemporaryDirectory() as tmp:
+            log = AuditLog(Path(tmp) / "audit.jsonl")
+            log.write("login_ok", user="a")
+            log.write("authorize_ok", user="a", device=DEV_ID)
+            log.write("login_failed", user="b")
+            self.assertEqual([e["event"] for e in log.tail(10, event="login_ok")],
+                             ["login_ok"])
+            self.assertEqual(len(log.tail(10, device=DEV_ID)), 1)
+            self.assertEqual(len(log.tail(2)), 2)          # newest two
 
 
 if __name__ == "__main__":

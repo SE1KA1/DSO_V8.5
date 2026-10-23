@@ -35,7 +35,7 @@
       <div class="msg" id="devicesMsg"></div>
       <table>
         <thead>
-          <tr><th>设备</th><th>能力</th><th>命令地址</th><th>绑定数</th></tr>
+          <tr><th>设备</th><th>能力</th><th>命令地址</th><th>绑定数</th><th>License 数</th></tr>
         </thead>
         <tbody id="devicesBody"></tbody>
       </table>
@@ -117,7 +117,12 @@
     <section class="card">
       <h2>审计 <span class="hint">最近 100 条</span></h2>
       <div class="row">
+        <label for="auditEvent">事件</label>
+        <input id="auditEvent" placeholder="authorize_ok">
+        <label for="auditDevice">设备</label>
+        <input id="auditDevice" placeholder="Eep21025E269FA2E">
         <button id="loadAudit" type="button">刷新</button>
+        <button id="exportAudit" type="button">导出 CSV</button>
         <label><input id="autoAudit" type="checkbox" checked style="min-width:auto" size="1"> 每 10 秒自动刷新</label>
       </div>
       <div class="msg" id="auditMsg"></div>
