@@ -17,6 +17,7 @@
 #include "dso_auth_ca.h"
 #include "dso_b64.h"
 #include "dso_devkey.h"
+#include "dso_lic_store.h"
 #include "dso_atecc608b.h"          /* DSO_Atecc608b_DeviceId16 */
 #include "debug_uart_lock.h"
 
@@ -54,6 +55,10 @@ static int authsoft_ensure(void);
 /* Print the cost of the first few curve operations (P-256 at -O1 with
  * ECP_WINDOW_SIZE=2 is not fast; this tells us the real numbers once). */
 static uint8_t s_timing_left = 8u;
+
+static uint8_t s_restored = 0u;      /* 1 = current license came from EEPROM */
+static uint8_t s_restoring = 0u;     /* 1 while restoring (do not re-save) */
+static uint8_t s_save_warned = 0u;
 
 static void report_timing(const char *tag, uint32_t t0)
 {
@@ -227,6 +232,11 @@ int DSO_AuthSoft_GetLicense(DSO_AuthLicense *out)
     }
     *out = s_cur_lic;
     return 1;
+}
+
+int DSO_AuthSoft_Restored(void)
+{
+    return (int)s_restored;
 }
 
 /* ===================================================================== */
@@ -416,6 +426,20 @@ int DSO_AuthSoft_VerifyLicense(const char *token, DSO_AuthLicense *out)
     (void)strcpy(s_login, "AUTHORIZED");
     s_cur_lic = *out;          /* remember it for atecc.get_license / telemetry */
     s_has_lic = 1u;
+
+    /* Persist the signed token so it survives a power cycle. Best effort:
+     * a missing / write-protected EEPROM must never break authorization. */
+    if (s_restoring == 0u) {
+        s_restored = 0u;                   /* fresh from the server, not restored */
+        if (DSO_LicStore_Save(token, (uint16_t)strlen(token)) != 0 &&
+            s_save_warned == 0u) {
+            s_save_warned = 1u;
+            DebugUartLock();
+            printf("[AUTH-SW] WARN: license not persisted (EEPROM write failed)\r\n");
+            DebugUartUnlock();
+        }
+    }
+
     if (s_res_after_verify == 0u) {
         s_res_after_verify = 1u;
         report_resources("after license verify");
@@ -472,6 +496,31 @@ static int authsoft_ensure(void)
     return DSO_AUTH_OK;
 }
 
+/* Re-load the last persisted license after a reboot.
+ * VerifyLicense() re-checks the signature and the device binding; time is NOT
+ * checked (the device has no clock), so this is "last known good", not "valid now". */
+static void restore_from_nvm(void)
+{
+    char token[DSO_LIC_STORE_MAX_TOKEN + 1u];
+    uint16_t len = 0u;
+    DSO_AuthLicense lic;
+    int rc;
+
+    if (DSO_LicStore_Load(token, (uint16_t)sizeof(token), &len) != 0) {
+        return;
+    }
+    s_restoring = 1u;
+    rc = DSO_AuthSoft_VerifyLicense(token, &lic);
+    s_restoring = 0u;
+    if (rc == DSO_AUTH_OK) {
+        s_restored = 1u;
+        DebugUartLock();
+        printf("[AUTH-SW] restored license %s from EEPROM (signature OK)\r\n",
+               lic.lic);
+        DebugUartUnlock();
+    }
+}
+
 static int authsoft_do_init(void)
 {
     uint32_t t0 = HAL_GetTick();
@@ -501,6 +550,13 @@ static int authsoft_do_init(void)
     printf("[AUTH-SW] selftest %s (arena=%u B)\r\n",
            (rc == DSO_AUTH_OK) ? "sign=OK verify=OK" : "FAILED",
            (unsigned)sizeof(s_arena));
+    DebugUartUnlock();
+
+    if (rc == DSO_AUTH_OK) {
+        restore_from_nvm();
+    }
+
+    DebugUartLock();
     printf("[AUTH-SW] init total %lu ms\r\n",
            (unsigned long)(HAL_GetTick() - t0));
     DebugUartUnlock();

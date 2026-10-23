@@ -60,4 +60,9 @@ const char *DSO_AuthSoft_LoginState(void);
  *  @return 1 = a license is held; 0 = none (never verified since boot). */
 int DSO_AuthSoft_GetLicense(DSO_AuthLicense *out);
 
+/** 1 = the held license was restored from EEPROM after a reboot (not freshly
+ *  verified online). Its signature is valid, but its expiry was NOT checked —
+ *  the device has no clock, so treat it as "last known good". */
+int DSO_AuthSoft_Restored(void);
+
 #endif /* DSO_AUTH_SOFT_H */

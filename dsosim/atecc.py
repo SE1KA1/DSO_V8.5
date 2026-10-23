@@ -85,6 +85,7 @@ class AteccSimulator:
             return "ok", "", {
                 "device_id": self.device_id,
                 "login_state": ("AUTHORIZED" if self._license else "NO_LICENSE"),
+                "restored": 0,          # the simulator has no EEPROM
                 "license": self._license,
             }
         return "error", "unknown cmd %s" % cmd, None

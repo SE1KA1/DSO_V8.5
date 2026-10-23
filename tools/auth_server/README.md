@@ -49,6 +49,7 @@ python -m tools.auth_server.service flow --host 192.168.100.50 --user stu001
 python -m tools.auth_server.service negtest --host 192.168.100.50 --user stu001
 
 # 10) 只读查询设备当前持有的 License（登录状态 + lic/user/nb/na/perm）
+#     restored=yes 表示这条记录是重启后从 EEPROM 恢复的（设备无时钟，不判过期）
 python -m tools.auth_server.service license --host 192.168.100.50
 
 # 11) 续期：设备证明 -> 新 License -> 推给设备

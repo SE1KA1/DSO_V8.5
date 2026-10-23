@@ -426,6 +426,7 @@ def _cmd_license(args) -> int:
     data = ack.get("data", {})
     print("device_id   :", data.get("device_id"))
     print("login_state :", data.get("login_state"))
+    print("restored    :", "yes (from EEPROM)" if data.get("restored") else "no")
     lic = data.get("license")
     if not lic:
         print("license     : (none held since boot)")

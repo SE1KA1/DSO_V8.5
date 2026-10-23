@@ -717,3 +717,46 @@ int BSP_I2C_UI_ReadRaw(uint8_t addr7, uint8_t *buf, uint8_t len)
     i2c_stop();
     return rc;
 }
+
+int BSP_I2C_UI_WriteRead(uint8_t addr7, const uint8_t *wbuf, uint8_t wlen,
+                         uint8_t *rbuf, uint8_t rlen)
+{
+    int rc = 0;
+    uint8_t i;
+
+    if (wbuf == NULL || wlen == 0u || rbuf == NULL || rlen == 0u) {
+        return -1;
+    }
+
+    i2c_start();
+    i2c_send_byte((uint8_t)((addr7 << 1) | I2C_UI_WR));
+    if (i2c_wait_ack() != 0U) {
+        rc = -1;
+    } else {
+        for (i = 0U; i < wlen; i++) {
+            i2c_send_byte(wbuf[i]);
+            if (i2c_wait_ack() != 0U) {
+                rc = -1;
+                break;
+            }
+        }
+        if (rc == 0) {
+            i2c_start();                     /* 重复起始（EEPROM 随机读必需） */
+            i2c_send_byte((uint8_t)((addr7 << 1) | I2C_UI_RD));
+            if (i2c_wait_ack() != 0U) {
+                rc = -1;
+            } else {
+                for (i = 0U; i < rlen; i++) {
+                    rbuf[i] = i2c_read_byte();
+                    if (i == (uint8_t)(rlen - 1u)) {
+                        i2c_nack();
+                    } else {
+                        i2c_master_ack();
+                    }
+                }
+            }
+        }
+    }
+    i2c_stop();
+    return rc;
+}

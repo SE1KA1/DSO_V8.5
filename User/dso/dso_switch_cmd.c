@@ -434,9 +434,11 @@ static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz,
                          "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
                          "\"cmd\":\"atecc.get_license\",\"result\":\"ok\",\"error\":\"\","
                          "\"data\":{\"device_id\":\"%s\",\"login_state\":\"%s\","
+                         "\"restored\":%u,"
                          "\"license\":{\"lic\":\"%s\",\"user\":\"%s\",\"dev\":\"%s\","
                          "\"nb\":%lu,\"na\":%lu,\"perm\":%lu}}}",
                          seq, did, DSO_AuthSoft_LoginState(),
+                         (unsigned)DSO_AuthSoft_Restored(),
                          lic.lic, lic.user, lic.dev,
                          (unsigned long)lic.nb, (unsigned long)lic.na,
                          (unsigned long)lic.perm);
@@ -445,8 +447,9 @@ static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz,
                          "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
                          "\"cmd\":\"atecc.get_license\",\"result\":\"ok\",\"error\":\"\","
                          "\"data\":{\"device_id\":\"%s\",\"login_state\":\"%s\","
-                         "\"license\":null}}",
-                         seq, did, DSO_AuthSoft_LoginState());
+                         "\"restored\":%u,\"license\":null}}",
+                         seq, did, DSO_AuthSoft_LoginState(),
+                         (unsigned)DSO_AuthSoft_Restored());
             }
         }
 #else

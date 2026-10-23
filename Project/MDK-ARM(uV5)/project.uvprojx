@@ -754,6 +754,11 @@
               <FileType>1</FileType>
               <FilePath>..\..\User\dso\dso_devkey.c</FilePath>
             </File>
+            <File>
+              <FileName>dso_lic_store.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\dso\dso_lic_store.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

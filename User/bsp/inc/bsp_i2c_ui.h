@@ -175,6 +175,15 @@ int BSP_I2C_UI_DiagTxBytes(uint8_t addr7, const uint8_t *buf, uint8_t len,
  */
 int BSP_I2C_UI_ReadRaw(uint8_t addr7, uint8_t *buf, uint8_t len);
 
+/**
+ * 写段 + **重复起始** + 读段（同一次事务，中间不发 STOP）。
+ * EEPROM（AT24Cxx）的"随机读"必须先写 2 字节地址、再用重复起始切换为读。
+ * @param wbuf/wlen 写段（≥1 字节）；rbuf/rlen 读段（≥1 字节，<256）
+ * @return 0 成功；-1 任一阶段无应答 / 参数错误。
+ */
+int BSP_I2C_UI_WriteRead(uint8_t addr7, const uint8_t *wbuf, uint8_t wlen,
+                         uint8_t *rbuf, uint8_t rlen);
+
 #ifdef __cplusplus
 }
 #endif
