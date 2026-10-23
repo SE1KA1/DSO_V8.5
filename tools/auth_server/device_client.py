@@ -150,3 +150,7 @@ class DeviceClient:
 
     def get_license(self) -> dict:
         return self.send_cmd("atecc.get_license")
+
+    def clear_license(self) -> dict:
+        """Erase the license saved in the device's EEPROM (4-byte magic write)."""
+        return self.send_cmd("atecc.license_clear")

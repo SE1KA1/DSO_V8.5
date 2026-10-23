@@ -88,6 +88,9 @@ class AteccSimulator:
                 "restored": 0,          # the simulator has no EEPROM
                 "license": self._license,
             }
+        if cmd == "atecc.license_clear":
+            self._license = None
+            return "ok", "", {"cleared": 1}
         return "error", "unknown cmd %s" % cmd, None
 
     def _auth_verify(self, params: dict) -> tuple[str, str, dict | None]:

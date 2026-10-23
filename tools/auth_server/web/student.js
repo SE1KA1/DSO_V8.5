@@ -129,6 +129,10 @@
       state.textContent = "";
       state.appendChild(A.badge(data.login_state === "AUTHORIZED" ? "已授权" : "未授权",
                                 data.login_state === "AUTHORIZED" ? "on" : "off"));
+      if (data.restored) {
+        state.appendChild(document.createTextNode(" "));
+        state.appendChild(A.badge("重启恢复", "warn"));
+      }
       var lic = data.license;
       renderKv(A.el("deviceKv"), lic ? [
         ["License", lic.lic],

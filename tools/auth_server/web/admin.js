@@ -48,6 +48,14 @@
         A.cell(tr, d.host ? (d.host + ":" + d.port) : "未登记", "mono");
         A.cell(tr, d.bindings);
         A.cell(tr, d.licenses);
+        var act = document.createElement("td");
+        var clr = document.createElement("button");
+        clr.type = "button";
+        clr.className = "danger";
+        clr.textContent = "清除记录";
+        clr.dataset.clear = d.device;
+        act.appendChild(clr);
+        tr.appendChild(act);
         body.appendChild(tr);
       });
       A.setMsg(msg, "共 " + data.devices.length + " 台设备", "ok");
@@ -186,6 +194,18 @@
   A.el("exportAudit").addEventListener("click", exportAudit);
   A.el("auditEvent").addEventListener("change", loadAudit);
   A.el("auditDevice").addEventListener("change", loadAudit);
+
+  A.el("devicesBody").addEventListener("click", function (ev) {
+    var btn = ev.target.closest("button[data-clear]");
+    if (!btn) return;
+    var dev = btn.dataset.clear;
+    if (!confirm("清除设备 " + dev + " 上持久化的 License 记录？\n" +
+                 "（设备会立即显示未授权；下次授权会重新写入）")) {
+      return;
+    }
+    post("/api/admin/device/" + encodeURIComponent(dev) + "/clear-license",
+         {}, A.el("devicesMsg"), "设备端记录已清除");
+  });
 
   A.el("licensesBody").addEventListener("click", function (ev) {
     var btn = ev.target.closest("button[data-lic]");

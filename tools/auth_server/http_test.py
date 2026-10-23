@@ -575,6 +575,27 @@ class TestAdmin(Base):
         status, _, _ = self.get("/api/admin/licenses", {"X-Admin-Token": "no"})
         self.assertEqual(status, 401)
 
+    def test_admin_clear_license(self) -> None:
+        sid = self.login()
+        status, body, _ = self.post("/api/authorize", {"sid": sid, "device": DEV_ID})
+        self.assertEqual(status, 200, body)
+        status, lic, _ = self.get("/api/device/%s/license" % DEV_ID,
+                                  {"X-Session": sid})
+        self.assertEqual(lic["login_state"], "AUTHORIZED")
+
+        status, resp, _ = self.post(
+            "/api/admin/device/%s/clear-license" % DEV_ID, {}, self.ADMIN_H)
+        self.assertEqual(status, 200, resp)
+
+        status, lic, _ = self.get("/api/device/%s/license" % DEV_ID,
+                                  {"X-Session": sid})
+        self.assertEqual(lic["login_state"], "NO_LICENSE")
+
+    def test_clear_license_requires_admin(self) -> None:
+        status, _, _ = self.post(
+            "/api/admin/device/%s/clear-license" % DEV_ID, {})
+        self.assertEqual(status, 401)
+
     def test_audit_filter_by_event(self) -> None:
         self.login()
         status, body, _ = self.get("/api/admin/audit?event=login_ok", self.ADMIN_H)

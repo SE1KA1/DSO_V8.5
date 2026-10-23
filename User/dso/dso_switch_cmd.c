@@ -462,6 +462,40 @@ static int sw_cmd_handle_locked(const char *line, char *reply, size_t reply_sz,
         return 1;
     }
 
+    /* atecc.license_clear：清除设备端持久化的 License（只写 EEPROM 的 magic，
+     * 可逆、不影响当前会话状态之外的东西） */
+    if (strcmp(cmd, "atecc.license_clear") == 0) {
+#if DSO_AUTH_DEV_SOFTKEY
+        int arc;
+        if (channel != DSO_SW_CMD_CH_ETH) {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.license_clear\",\"result\":\"error\","
+                     "\"error\":\"use the TCP channel\",\"data\":{}}", seq);
+            return 1;
+        }
+        arc = DSO_AuthSoft_ClearLicense();
+        if (arc != 0) {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.license_clear\",\"result\":\"error\","
+                     "\"error\":\"clear failed rc=%d (EEPROM)\",\"data\":{}}",
+                     seq, arc);
+        } else {
+            snprintf(reply, reply_sz,
+                     "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                     "\"cmd\":\"atecc.license_clear\",\"result\":\"ok\",\"error\":\"\","
+                     "\"data\":{\"cleared\":1}}", seq);
+        }
+#else
+        snprintf(reply, reply_sz,
+                 "{\"ver\":\"0.9\",\"type\":\"ack\",\"seq\":%d,"
+                 "\"cmd\":\"atecc.license_clear\",\"result\":\"error\","
+                 "\"error\":\"not implemented on the ATECC path\",\"data\":{}}", seq);
+#endif
+        return 1;
+    }
+
     return 0;   /* 非本模块命令，交给其它处理器 */
 }
 

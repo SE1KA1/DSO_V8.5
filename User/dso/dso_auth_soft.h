@@ -65,4 +65,8 @@ int DSO_AuthSoft_GetLicense(DSO_AuthLicense *out);
  *  the device has no clock, so treat it as "last known good". */
 int DSO_AuthSoft_Restored(void);
 
+/** 清除持久化的 License（只写 EEPROM 的 magic 并清空内存状态）。
+ *  @return 0 成功；<0 EEPROM 写入失败。 */
+int DSO_AuthSoft_ClearLicense(void);
+
 #endif /* DSO_AUTH_SOFT_H */

@@ -320,6 +320,11 @@ class AuthHandler(BaseHTTPRequestHandler):
             self._need(method, "GET")
             self._get_device_license(m.group(1))
             return
+        m = re.fullmatch(r"/api/admin/device/([^/]+)/clear-license", path)
+        if m:
+            self._need(method, "POST")
+            self._post_admin_clear_license(m.group(1))
+            return
 
         if self._serve_static(path):
             return
@@ -442,6 +447,32 @@ class AuthHandler(BaseHTTPRequestHandler):
                               "device_id": data.get("device_id"),
                               "login_state": data.get("login_state"),
                               "license": data.get("license")})
+
+    # ---- admin: erase the license stored on the device -------------------
+    def _post_admin_clear_license(self, dev: str) -> None:
+        self._admin()
+        if not DEVICE_RE.match(dev):
+            raise ApiError(400, "bad_device", "device must be 16 alphanumerics")
+        ctx = self.ctx
+        lock = ctx.device_lock(dev)
+        if not lock.acquire(timeout=1.0):
+            raise ApiError(409, "device_busy", "another request is using this device")
+        try:
+            client = ctx.client_for(dev)
+            try:
+                with client:
+                    ack = client.clear_license()
+            except DeviceTimeout:
+                raise ApiError(504, "device_timeout", "no reply from device") from None
+            except DeviceError as exc:
+                raise ApiError(502, "device_error", str(exc)) from None
+        finally:
+            lock.release()
+        if ack.get("result") != "ok":
+            raise ApiError(502, "device_error", str(ack.get("error", "")))
+        ctx.audit.write("admin_license_cleared", device=dev,
+                        peer=self.client_address[0])
+        self._send_json(200, {"ok": True, "device": dev})
 
     def _require_session_or_admin(self) -> str | None:
         """@return the session's user name, or None for an admin-token caller."""

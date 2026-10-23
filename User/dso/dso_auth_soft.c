@@ -247,6 +247,17 @@ int DSO_AuthSoft_Restored(void)
     return (int)s_restored;
 }
 
+int DSO_AuthSoft_ClearLicense(void)
+{
+    int rc = DSO_LicStore_Clear();
+
+    s_has_lic = 0u;
+    s_restored = 0u;
+    (void)strcpy(s_login, "NO_LICENSE");
+    (void)memset(&s_cur_lic, 0, sizeof(s_cur_lic));
+    return rc;
+}
+
 /* ===================================================================== */
 /* Strict license payload parser                                         */
 /* ===================================================================== */
