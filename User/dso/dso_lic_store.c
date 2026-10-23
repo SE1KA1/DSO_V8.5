@@ -19,8 +19,9 @@
 #define REC_CRC_OFF     (REC_TOK_OFF + DSO_LIC_STORE_MAX_TOKEN)   /* 348 */
 #define REC_SIZE        (REC_CRC_OFF + 4u)                        /* 352 */
 
-/* 授权路径是串行的（命令通道互斥），一份静态缓冲足够，避免占任务栈。 */
+/* 授权路径是串行的（命令通道互斥），静态缓冲足够，避免占任务栈。 */
 static uint8_t s_rec[REC_SIZE];
+static uint8_t s_rb[REC_SIZE];        /* read-back / load buffer */
 
 static uint32_t crc32_ieee(const uint8_t *d, uint32_t n)
 {
@@ -136,7 +137,24 @@ int DSO_LicStore_Save(const char *token, uint16_t len)
     s_rec[REC_CRC_OFF + 2u] = (uint8_t)((crc >> 16) & 0xFFu);
     s_rec[REC_CRC_OFF + 3u] = (uint8_t)((crc >> 24) & 0xFFu);
 
-    return ee_write(DSO_LIC_STORE_SLOT_ADDR, s_rec, REC_SIZE);
+    if (ee_write(DSO_LIC_STORE_SLOT_ADDR, s_rec, REC_SIZE) != 0) {
+        return -1;                       /* bus/ACK failure */
+    }
+    /* Read back: a "successful" write that did not land would otherwise look
+     * like persistence worked until the next reboot. */
+    if (ee_read(DSO_LIC_STORE_SLOT_ADDR, s_rb, REC_SIZE) != 0) {
+        return -2;                       /* read-back failed */
+    }
+    if (memcmp(s_rb, s_rec, REC_SIZE) != 0) {
+        uint16_t i;
+        for (i = 0u; i < REC_SIZE; i++) {
+            if (s_rb[i] != s_rec[i]) {
+                return (int)(-100 - (int)i);   /* encode first mismatch offset */
+            }
+        }
+        return -3;
+    }
+    return 0;
 }
 
 int DSO_LicStore_Load(char *buf, uint16_t cap, uint16_t *out_len)

@@ -58,7 +58,6 @@ static uint8_t s_timing_left = 8u;
 
 static uint8_t s_restored = 0u;      /* 1 = current license came from EEPROM */
 static uint8_t s_restoring = 0u;     /* 1 while restoring (do not re-save) */
-static uint8_t s_save_warned = 0u;
 
 static void report_timing(const char *tag, uint32_t t0)
 {
@@ -227,7 +226,16 @@ const char *DSO_AuthSoft_LoginState(void)
 
 int DSO_AuthSoft_GetLicense(DSO_AuthLicense *out)
 {
-    if (out == NULL || s_has_lic == 0u) {
+    if (out == NULL) {
+        return 0;
+    }
+    /* A plain status query must also surface a license restored from EEPROM.
+     * Trigger the (one-time) lazy init here too — it runs on the same ETH_Up
+     * task as the auth commands, so the stack budget is identical. */
+    if (s_has_lic == 0u && s_init_state == 0u) {
+        (void)authsoft_ensure();
+    }
+    if (s_has_lic == 0u) {
         return 0;
     }
     *out = s_cur_lic;
@@ -430,14 +438,19 @@ int DSO_AuthSoft_VerifyLicense(const char *token, DSO_AuthLicense *out)
     /* Persist the signed token so it survives a power cycle. Best effort:
      * a missing / write-protected EEPROM must never break authorization. */
     if (s_restoring == 0u) {
+        int src;
         s_restored = 0u;                   /* fresh from the server, not restored */
-        if (DSO_LicStore_Save(token, (uint16_t)strlen(token)) != 0 &&
-            s_save_warned == 0u) {
-            s_save_warned = 1u;
-            DebugUartLock();
-            printf("[AUTH-SW] WARN: license not persisted (EEPROM write failed)\r\n");
-            DebugUartUnlock();
+        src = DSO_LicStore_Save(token, (uint16_t)strlen(token));
+        DebugUartLock();
+        if (src == 0) {
+            printf("[AUTH-SW] license %s persisted to EEPROM\r\n", out->lic);
+        } else if (src <= -100) {
+            printf("[AUTH-SW] WARN: EEPROM readback mismatch at offset %d\r\n",
+                   (int)(-100 - src));
+        } else {
+            printf("[AUTH-SW] WARN: license NOT persisted (EEPROM rc=%d)\r\n", src);
         }
+        DebugUartUnlock();
     }
 
     if (s_res_after_verify == 0u) {
