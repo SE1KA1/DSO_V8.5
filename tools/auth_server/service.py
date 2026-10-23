@@ -179,7 +179,8 @@ class AuthService:
         payload = proto.canonical_payload(fields)
         sig = self.ca.sign_digest(hashlib.sha256(payload).digest())
         token = proto.encode_token(payload, sig)
-        self.store.record_license(jti, lic, sess["user"], dev, fields["na"])
+        self.store.record_license(jti, lic, sess["user"], dev, fields["na"],
+                                  nb=fields["nb"])
         return token
 
     def verify_license(self, token: str, expect_dev: str | None = None) -> dict:

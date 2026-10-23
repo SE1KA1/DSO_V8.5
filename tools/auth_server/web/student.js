@@ -12,6 +12,7 @@
     if (!on) {
       A.el("resultCard").classList.add("hide");
       A.el("deviceCard").classList.add("hide");
+      A.el("historyCard").classList.add("hide");
     }
   }
 
@@ -82,12 +83,38 @@
       ]);
       A.el("resultCard").classList.remove("hide");
       await showDeviceStatus();
+      await loadHistory();
     } catch (e) {
       A.setMsg(msg, "失败：" + e.code + " — " + e.message, "err");
     } finally {
       btn.disabled = false;
       A.el("authorizeBtn").disabled = false;
       btn.textContent = label;
+    }
+  }
+
+  async function loadHistory() {
+    var msg = A.el("historyMsg");
+    try {
+      var data = await A.api("GET", "/api/history?limit=50", undefined,
+                             { "X-Session": sid });
+      var body = A.el("historyBody");
+      body.textContent = "";
+      data.history.forEach(function (h) {
+        var tr = document.createElement("tr");
+        A.cell(tr, h.lic, "mono");
+        A.cell(tr, h.dev, "mono");
+        A.cell(tr, A.fmtOffset(h.nb));
+        A.cell(tr, A.fmtOffset(h.na));
+        var st = A.cell(tr, "");
+        st.appendChild(A.badge(h.revoked ? "已吊销" : "有效",
+                               h.revoked ? "off" : "on"));
+        body.appendChild(tr);
+      });
+      A.setMsg(msg, data.history.length ? "" : "还没有授权记录", "info");
+      A.el("historyCard").classList.remove("hide");
+    } catch (e) {
+      A.setMsg(msg, "读取历史失败：" + e.code + " — " + e.message, "err");
     }
   }
 
@@ -134,6 +161,7 @@
       A.el("password").value = "";
       showLoggedIn(true);
       await loadDevices();
+      await loadHistory();
     } catch (e) {
       A.setMsg(msg, "登录失败：" + e.code + " — " + e.message, "err");
     } finally {
@@ -156,6 +184,7 @@
   if (sid) {
     showLoggedIn(true);
     loadDevices();
+    loadHistory();
   } else {
     showLoggedIn(false);
   }

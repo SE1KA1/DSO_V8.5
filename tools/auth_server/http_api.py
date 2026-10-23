@@ -29,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote_plus, urlsplit
 
+from . import proto
 from .audit import AuditLog
 from .device_client import DeviceClient, DeviceError, DeviceTimeout
 from .flow import FlowError, authorize
@@ -309,6 +310,10 @@ class AuthHandler(BaseHTTPRequestHandler):
             self._need(method, "GET")
             self._get_devices()
             return
+        if path == "/api/history":
+            self._need(method, "GET")
+            self._get_history()
+            return
 
         m = re.fullmatch(r"/api/device/([^/]+)/license", path)
         if m:
@@ -438,15 +443,16 @@ class AuthHandler(BaseHTTPRequestHandler):
                               "login_state": data.get("login_state"),
                               "license": data.get("license")})
 
-    def _require_session_or_admin(self) -> None:
+    def _require_session_or_admin(self) -> str | None:
+        """@return the session's user name, or None for an admin-token caller."""
         token = self.headers.get("X-Admin-Token")
         if token is not None:
             self.ctx.require_admin(self.client_address[0], token)
-            return
+            return None
         sid = self.headers.get("X-Session")
         if not sid:
             raise ApiError(401, "auth_required", "X-Session or X-Admin-Token required")
-        self._validate_session(sid)
+        return self._validate_session(sid)
 
     # ---- admin: users / devices / bindings / revoke ----------------------
     def _admin(self) -> None:
@@ -654,17 +660,42 @@ class AuthHandler(BaseHTTPRequestHandler):
 
     # ---- device list for the student page --------------------------------
     def _get_devices(self) -> None:
-        """Public-to-logged-in-users list: device IDs and capability only.
+        """Device IDs and capability only — and only what this user may use.
 
-        Deliberately omits pubkey/host/port — the student page only needs to
-        pick a device, and the command endpoint is nobody's business.
+        Deliberately omits pubkey/host/port (the command endpoint is nobody's
+        business) and, for a student session, hides devices they are not bound
+        to. An admin token still sees everything.
         """
-        self._require_session_or_admin()
+        user = self._require_session_or_admin()
         with self.ctx.svc_lock:
             devices = self.ctx.store.list_devices()
+            if user is not None:
+                allowed = set(self.ctx.store.list_bound_devices(
+                    user, proto.now_offset()))
+                devices = {d: r for d, r in devices.items() if d in allowed}
         out = [{"device": dev, "capability": rec.get("capability")}
                for dev, rec in sorted(devices.items())]
         self._send_json(200, {"ok": True, "devices": out})
+
+    # ---- the student's own history ---------------------------------------
+    def _get_history(self) -> None:
+        user = self._require_session_or_admin()
+        pairs = self._query_pairs()
+        limit = 50
+        if "limit" in pairs:
+            try:
+                limit = int(pairs["limit"])
+            except ValueError:
+                raise ApiError(400, "bad_limit", "limit must be an integer") from None
+        if limit < 1 or limit > 100:
+            raise ApiError(400, "bad_limit", "limit must be 1..100")
+        with self.ctx.svc_lock:
+            items = self.ctx.store.list_licenses(user=user)[:limit]
+        history = [{"lic": x.get("lic"), "dev": x.get("dev"),
+                    "nb": x.get("nb"), "na": x.get("na"),
+                    "revoked": bool(x.get("revoked"))}
+                   for x in items]
+        self._send_json(200, {"ok": True, "user": user, "history": history})
 
     # ---- static UI -------------------------------------------------------
     def _serve_static(self, path: str) -> bool:

@@ -241,21 +241,33 @@ class Store:
             self.save()
 
     # ---- licenses --------------------------------------------------------
-    def record_license(self, jti: str, lic: str, user: str, dev: str, na: int) -> None:
+    def record_license(self, jti: str, lic: str, user: str, dev: str, na: int,
+                       nb: int | None = None) -> None:
         if jti in self.data["licenses"]:
             raise RuntimeError("duplicate jti")
         self.data["licenses"][jti] = {
+            "nb": nb,
             "lic": lic, "user": user, "dev": dev, "na": na, "revoked": False}
         self.save()
 
     def get_license(self, jti: str) -> dict | None:
         return self.data["licenses"].get(jti)
 
-    def list_licenses(self) -> list[dict]:
-        """All issued licenses, newest first, with their jti included."""
-        out = [dict(rec, jti=jti) for jti, rec in self.data["licenses"].items()]
+    def list_licenses(self, user: str | None = None) -> list[dict]:
+        """Issued licenses, newest first, with their jti included (optional user filter)."""
+        out = [dict(rec, jti=jti) for jti, rec in self.data["licenses"].items()
+               if user is None or rec.get("user") == user]
         out.sort(key=lambda r: r.get("lic", ""), reverse=True)
         return out
+
+    def list_bound_devices(self, user: str, now_off: int) -> list[str]:
+        """Devices this user is allowed to use right now (active bindings only)."""
+        seen: list[str] = []
+        for b in self.data["bindings"]:
+            if (b["user"] == user and not b["revoked"]
+                    and b["nb"] <= now_off <= b["na"] and b["dev"] not in seen):
+                seen.append(b["dev"])
+        return seen
 
     def revoke_by_lic(self, lic: str) -> str:
         """Revoke by human-facing license number; returns the jti."""

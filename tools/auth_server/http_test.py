@@ -384,6 +384,48 @@ class TestHealthDuringDeviceWork(Base):
 
 
 # ---------------------------------------------------------------------------
+# Student views: own history + only bound devices
+# ---------------------------------------------------------------------------
+
+class TestStudentViews(Base):
+    def test_history_requires_auth(self) -> None:
+        status, _, _ = self.get("/api/history")
+        self.assertEqual(status, 401)
+
+    def test_history_lists_own_licenses(self) -> None:
+        sid = self.login()
+        status, body, _ = self.post("/api/authorize", {"sid": sid, "device": DEV_ID})
+        self.assertEqual(status, 200, body)
+        status, hist, _ = self.get("/api/history?limit=10", {"X-Session": sid})
+        self.assertEqual(status, 200)
+        self.assertTrue(hist["history"])
+        first = hist["history"][0]
+        self.assertEqual(first["lic"], body["lic"])
+        self.assertEqual(first["dev"], DEV_ID)
+        self.assertIsNotNone(first["nb"])
+        self.assertFalse(first["revoked"])
+
+    def test_history_limit_bounds(self) -> None:
+        sid = self.login()
+        for bad in ("0", "101", "x"):
+            status, _, _ = self.get("/api/history?limit=%s" % bad, {"X-Session": sid})
+            self.assertEqual(status, 400, bad)
+
+    def test_devices_are_filtered_by_binding(self) -> None:
+        self.store.add_user("stu002", "another pass")
+        status, body, _ = self.post("/api/session",
+                                    {"user": "stu002", "password": "another pass"})
+        self.assertEqual(status, 200)
+        other_sid = body["sid"]
+        status, body, _ = self.get("/api/devices", {"X-Session": other_sid})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["devices"], [])          # not bound to anything
+
+        status, body, _ = self.get("/api/devices", {"X-Session": self.login()})
+        self.assertEqual([d["device"] for d in body["devices"]], [DEV_ID])
+
+
+# ---------------------------------------------------------------------------
 # Static UI + device list + Origin policy
 # ---------------------------------------------------------------------------
 
