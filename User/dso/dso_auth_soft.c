@@ -530,7 +530,11 @@ static void restore_from_nvm(void)
     DSO_AuthLicense lic;
     int rc;
 
-    if (DSO_LicStore_Load(token, (uint16_t)sizeof(token), &len) != 0) {
+    rc = DSO_LicStore_Load(token, (uint16_t)sizeof(token), &len);
+    if (rc != 0) {
+        DebugUartLock();
+        printf("[AUTH-SW] no stored license to restore (EEPROM load rc=%d)\r\n", rc);
+        DebugUartUnlock();
         return;
     }
     s_restoring = 1u;
@@ -541,6 +545,11 @@ static void restore_from_nvm(void)
         DebugUartLock();
         printf("[AUTH-SW] restored license %s from EEPROM (signature OK)\r\n",
                lic.lic);
+        DebugUartUnlock();
+    } else {
+        DebugUartLock();
+        printf("[AUTH-SW] stored license REJECTED rc=%d (signature/device mismatch)\r\n",
+               rc);
         DebugUartUnlock();
     }
 }

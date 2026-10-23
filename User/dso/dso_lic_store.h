@@ -24,7 +24,8 @@
 int DSO_LicStore_Save(const char *token, uint16_t len);
 
 /** 读回并校验 magic/version/CRC；成功时把 token 写进 buf 并以 NUL 结尾。
- *  @return 0 成功；<0 无记录 / 校验失败。 */
+ *  @return 0 成功；<0 具体原因：-1 总线/ACK、-2 无记录（空片/已清除）、
+ *          -3 版本不符、-4 长度非法、-5 CRC 不符（可能是断电半写）。 */
 int DSO_LicStore_Load(char *buf, uint16_t cap, uint16_t *out_len);
 
 /** 让记录失效（只清 magic）。 */

@@ -166,25 +166,25 @@ int DSO_LicStore_Load(char *buf, uint16_t cap, uint16_t *out_len)
         return -1;
     }
     if (ee_read(DSO_LIC_STORE_SLOT_ADDR, s_rec, REC_SIZE) != 0) {
-        return -1;
+        return -1;                               /* bus / ACK failure */
     }
     if (memcmp(s_rec, "LICS", 4u) != 0) {
-        return -1;                               /* 空片 / 已清除 */
+        return -2;                               /* empty chip / cleared */
     }
     if (s_rec[REC_VER_OFF] != 1u || s_rec[REC_VER_OFF + 1u] != 0u) {
-        return -1;
+        return -3;                               /* unknown version */
     }
     len = (uint16_t)((uint16_t)s_rec[REC_LEN_OFF] |
                      ((uint16_t)s_rec[REC_LEN_OFF + 1u] << 8));
     if (len == 0u || len > DSO_LIC_STORE_MAX_TOKEN || len >= cap) {
-        return -1;
+        return -4;                               /* bad length */
     }
     crc = crc32_ieee(s_rec, REC_CRC_OFF);
     if (s_rec[REC_CRC_OFF] != (uint8_t)(crc & 0xFFu) ||
         s_rec[REC_CRC_OFF + 1u] != (uint8_t)((crc >> 8) & 0xFFu) ||
         s_rec[REC_CRC_OFF + 2u] != (uint8_t)((crc >> 16) & 0xFFu) ||
         s_rec[REC_CRC_OFF + 3u] != (uint8_t)((crc >> 24) & 0xFFu)) {
-        return -1;
+        return -5;                               /* CRC mismatch (partial write?) */
     }
 
     (void)memcpy(buf, &s_rec[REC_TOK_OFF], len);
