@@ -276,7 +276,11 @@ static void vFmcTelTask(void *pvParameters)
                     }
                 }
             }
-            if (n < 0) {
+            if (n == 0) {
+                /* Peer closed (FIN): the server is gone, reconnect. */
+                tel_disconnect();
+            } else if (n < 0 && errno != EWOULDBLOCK && errno != EAGAIN) {
+                /* Real socket error; an empty non-blocking poll is not one. */
                 tel_disconnect();
             }
         }

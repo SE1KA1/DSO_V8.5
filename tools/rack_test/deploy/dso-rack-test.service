@@ -1,0 +1,22 @@
+[Unit]
+Description=DSO V8.5 rack telemetry receiver (module test harness)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dso
+Group=dso
+WorkingDirectory=/opt/dso_rack_test
+Environment=PYTHONPATH=/opt/dso_rack_test
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m tools.rack_test serve --config /etc/dso_rack_test/config.json
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+StateDirectory=dso_rack_test
+LogsDirectory=dso_rack_test
+
+[Install]
+WantedBy=multi-user.target

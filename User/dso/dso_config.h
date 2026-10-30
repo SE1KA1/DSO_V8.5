@@ -334,6 +334,19 @@
 #define DSO_AUTH_DEV_SOFTKEY               1u
 #endif
 
+/* ---- Rack control-plane test build (TEST ONLY) ----
+ * 1 = rack test build:
+ *     - skip the legacy FMC telemetry client (its EWOULDBLOCK handling causes a
+ *       50 ms connect/close storm and consumes a LwIP netconn/TCP PCB);
+ *     - skip the UDP-5006 throughput test receiver (frees one netconn);
+ *     - raise the ETH_Up task priority from 2 to 4 so the single-client 5005
+ *       listener is not starved by the priority-3 telemetry tasks.
+ * 0 = normal firmware. Set back to 0 and rebuild after the rack test.
+ * Module telemetry and the watchdog are unaffected. */
+#ifndef DSO_RACK_TEST_BUILD
+#define DSO_RACK_TEST_BUILD                0
+#endif
+
 /* Disable internal 100 kHz DAC test source when chasing external high-speed input */
 #ifndef DSO_TESTGEN_ENABLE
 /* 宏定义: DSO_TESTGEN_ENABLE - 编译期开关，用于启用或关闭对应功能。 */

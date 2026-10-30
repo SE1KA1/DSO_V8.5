@@ -36,6 +36,12 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The 5005 listener must preempt the priority-3 telemetry tasks: a spinning
+ * MainTask (GUI_Init) can otherwise starve the priority-2 listener, which
+ * completes TCP handshakes but never accepts/replies.  Verified on the rack;
+ * keep this at 4 for both test and production builds. */
+#define DSO_ETH_UP_TASK_PRIO 4
+
 #if DSO_APP_INFO_PRINTF_ENABLE
 /* 宏定义: APP_INFO_PRINTF - APP_INFO_PRINTF 的宏定义。 */
 #define APP_INFO_PRINTF(...) printf(__VA_ARGS__)
@@ -541,8 +547,14 @@ int main(void)
     /* SP706T 看门狗：PB9 喂狗 + PFO# 读 + 复位原因上报 */
     DSO_Watchdog_Init();
 
-    /* FMC 遥测推送：任务内部等待 LwIP netif up 后连接服务器 */
+    /* FMC 遥测推送：任务内部等待 LwIP netif up 后连接服务器。
+     * 机架测试构建关闭：legacy 连接的 MSG_DONTWAIT 误判会造成连断风暴，
+     * 并与 5005 单客户端监听器争 LwIP netconn/TCP PCB。 */
+#if DSO_RACK_TEST_BUILD
+    printf("[BOOT] legacy FMC telemetry disabled (rack test)\r\n");
+#else
     DSO_FmcTelemetry_Init();
+#endif
 
 #if (LCD_DIAGNOSTIC_MODE == 1)
     /* 硬件诊断测试：绕过 emWin 直接测试 LTDC */
@@ -586,11 +598,14 @@ int main(void)
     RtosCpuStats_TaskCreate();
 #endif
 
-    if (xTaskCreate(DSO_ETH_Upload_Task, "ETH_Up", 2560, NULL, 2, NULL) != pdPASS)
+    if (xTaskCreate(DSO_ETH_Upload_Task, "ETH_Up", 2560, NULL,
+                    DSO_ETH_UP_TASK_PRIO, NULL) != pdPASS)
     { printf("[BOOT] FAIL ETH_Up\r\n"); Error_Handler(__FILE__, __LINE__); }
     if (xTaskCreate(DSO_Ping_Task, "Ping", 1024, NULL, 1, NULL) != pdPASS)
     { printf("[BOOT] FAIL Ping\r\n"); Error_Handler(__FILE__, __LINE__); }
+#if !DSO_RACK_TEST_BUILD
     DSO_ETH_UDP_RX_Init();
+#endif
 
 #if FMC16_ENABLE
     /* FMC16 云桥服务任务：1ms 轮询 FMC 总线、解析协议包、维护链路 */

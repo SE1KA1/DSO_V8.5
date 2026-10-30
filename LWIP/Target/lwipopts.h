@@ -52,12 +52,27 @@
 /* LwIP 大窗口稳定配置（MSS 1460 + 8×MSS 窗口，MEM 64K 放 SRAM1 0x30004000，余量充足） */
 #define MEM_SIZE                65536
 #define MEMP_NUM_TCP_SEG        32
+/* Rack control-plane test build: 8 leaves room for the 5005 listener + the
+ * accepted client + module telemetry after the legacy A2 client is disabled.
+ * Set LWIP_RACK_TEST_POOLS to 0 for the production 4/2/4 values. */
+#ifndef LWIP_RACK_TEST_POOLS
+#define LWIP_RACK_TEST_POOLS    1
+#endif
+#if LWIP_RACK_TEST_POOLS
+#define MEMP_NUM_TCP_PCB        8
+#define MEMP_NUM_UDP_PCB        4
+#else
 #define MEMP_NUM_TCP_PCB        4
 #define MEMP_NUM_UDP_PCB        2
+#endif
 #define MEMP_NUM_PBUF           32
 #define MEMP_NUM_NETBUF         16
 #define MEMP_NUM_FRAG_PBUF      6
+#if LWIP_RACK_TEST_POOLS
+#define MEMP_NUM_NETCONN        8
+#else
 #define MEMP_NUM_NETCONN        4
+#endif
 #define MEMP_NUM_TCPIP_MSG_API  8
 #define MEMP_NUM_TCPIP_MSG_INPKT 16
 #define PBUF_POOL_SIZE          32

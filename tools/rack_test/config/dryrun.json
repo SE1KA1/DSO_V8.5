@@ -1,0 +1,12 @@
+{
+  "_comment": "Offline dry-run overrides; the CLI still binds 127.0.0.1:0 and uses the fake device.",
+  "bind_host": "127.0.0.1",
+  "bind_port": 0,
+  "device_host": "127.0.0.1",
+  "device_port": 15005,
+  "baseline_s": 5.0,
+  "soak_s": 2.0,
+  "settle_s": 0.5,
+  "telemetry_wait_s": 10.0,
+  "raw_sample": 1
+}
