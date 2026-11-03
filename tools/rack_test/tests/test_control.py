@@ -2,7 +2,7 @@ import unittest
 
 from tools.auth_server.device_client import DeviceError
 from tools.rack_test.config import RackConfig
-from tools.rack_test.control import RackControl
+from tools.rack_test.control import RackControl, _redact_flow_output
 from tools.rack_test.fakedev import FakeDevice
 
 
@@ -87,6 +87,14 @@ class ControlTests(unittest.TestCase):
     def test_unknown_command_is_detected(self):
         with self.assertRaises(DeviceError):
             self.control.send("mystery.command")
+
+    def test_flow_output_license_prefix_is_redacted(self):
+        text = ("device_id   : Eep21025E269FA2E\n"
+                "license     : abcdefghij0123456789... (123 bytes)\n"
+                "verify      : OK\n")
+        out = _redact_flow_output(text)
+        self.assertIn("license     : <redacted>", out)
+        self.assertNotIn("abcdefghij0123456789", out)
 
 
 if __name__ == "__main__":

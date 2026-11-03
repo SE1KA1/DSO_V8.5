@@ -30,6 +30,18 @@ def _short_params(params: Optional[dict]) -> dict:
     return out
 
 
+def _redact_flow_output(text: str) -> str:
+    """The auth-service CLI prints the first 40 chars of the license token;
+    keep it out of the run artifacts (the get_license fields are enough)."""
+    lines = []
+    for line in (text or "").splitlines():
+        if line.strip().startswith("license"):
+            lines.append("license     : <redacted>")
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
 class RackControl:
     def __init__(self, config: RackConfig,
                  event_sink: Optional[RotatingJsonl] = None,
@@ -183,11 +195,13 @@ class RackControl:
             self._event({"kind": "auth_flow_error", "error": str(exc)})
             return (False, "", str(exc))
         ok = proc.returncode == 0
+        stdout = _redact_flow_output(proc.stdout)
+        stderr = _redact_flow_output(proc.stderr)
         self._event({"kind": "auth_flow_result", "ok": ok,
                      "returncode": proc.returncode,
-                     "stdout": proc.stdout[-2000:],
-                     "stderr": proc.stderr[-2000:]})
-        return (ok, proc.stdout, proc.stderr)
+                     "stdout": stdout[-2000:],
+                     "stderr": stderr[-2000:]})
+        return (ok, stdout, stderr)
 
     # --------------------------------------------------------------- internal
     def _event(self, record: dict) -> None:

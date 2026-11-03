@@ -236,6 +236,27 @@ class ChecksTests(unittest.TestCase):
         for cid in ("PCI-05", "PCI-06", "PCI-07"):
             self.assertEqual(self._find(results, cid).status, checks.SKIP, cid)
 
+    def test_atecc05_uses_post_flow_license(self):
+        atecc = {
+            "control_ok": True,
+            "license": {"result": "ok", "data": {
+                "login_state": "NO_LICENSE", "license": None}},
+            "auth_flow": {"ok": True, "stdout": "device proof: OK",
+                          "stderr": ""},
+            "license_after_flow": {"result": "ok", "data": {
+                "login_state": "AUTHORIZED",
+                "license": {"lic": "L00001", "user": "racktest",
+                            "dev": "Eep21025E269FA2E",
+                            "nb": 0, "na": 0, "perm": 1}}},
+        }
+        results = checks.atecc_command_checks(atecc)
+        item = self._find(results, "ATECC-05")
+        self.assertEqual(item.status, checks.PASS)
+        self.assertEqual(item.measured["get_license"]["login_state"],
+                         "AUTHORIZED")
+        self.assertEqual(item.measured["get_license_before_flow"]["login_state"],
+                         "NO_LICENSE")
+
     def test_atecc_absent_fails(self):
         stats = snapshot(atecc608b=slot(
             last={"present": 0, "comm_ok": 0, "login_state": "LOGGED_OUT",

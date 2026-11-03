@@ -666,8 +666,11 @@ def atecc_command_checks(atecc: dict) -> List[CheckResult]:
         source=["User/dso/dso_switch_cmd.c:291-367"]))
 
     lic = atecc.get("license") or {}
-    lic_data = lic.get("data") or {}
-    lic_ok = lic.get("result") == "ok" and "login_state" in lic_data
+    # Prefer the post-flow query: it is the evidence that the license landed.
+    evidence_lic = atecc.get("license_after_flow") or lic
+    lic_data = evidence_lic.get("data") or {}
+    lic_ok = (evidence_lic.get("result") == "ok"
+              and "login_state" in lic_data)
     flow = atecc.get("auth_flow")
     if not lic_ok:
         status, detail = FAIL, "get_license failed"
@@ -681,7 +684,9 @@ def atecc_command_checks(atecc: dict) -> List[CheckResult]:
         status, detail = SKIP, "control channel unavailable"
     out.append(CheckResult(
         "ATECC-05", "atecc608b", "license query / optional full flow", status,
-        measured={"get_license": lic_data, "auth_flow": flow},
+        measured={"get_license": lic_data,
+                  "get_license_before_flow": (lic.get("data") or {}),
+                  "auth_flow": flow},
         thresholds={"result": "ok"},
         detail=detail,
         source=["User/dso/dso_switch_cmd.c:426-463"]))
